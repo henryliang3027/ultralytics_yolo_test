@@ -1,0 +1,65 @@
+# Person detection -> tracking -> Re-ID -> gallery pipeline configuration.
+# Relative paths are resolved against the folder that contains this file.
+
+source:
+  url: rtsp://192.168.51.135:8554/fa57a71f-d37d-4fbd-a268-6a04e9ff852d   # RTSP URL, or a local video file for offline tests
+  backend: opencv          # opencv (FFmpeg, works out of the box) | gstreamer (needs PyGObject + decoder plugins, see README)
+  transport: tcp           # tcp (stable) | udp (lower latency, may drop packets on a busy network)
+  reconnect_delay_s: 2.0   # wait before reconnecting after the stream drops
+  # GStreamer only: depay ! parse ! decode part of the pipeline. H.265 camera -> rtph265depay ! h265parse ! avdec_h265
+  gst_decode: rtph264depay ! h264parse ! avdec_h264
+
+detector:
+  weights: ../yolo26s.pt
+  imgsz: 1920              # 3840x1920 panorama: people are small, 640 misses many of them
+  conf: 0.55                # keep low-score boxes; TrackTrack uses them to keep tracks alive through occlusion
+  device: 0                # GPU index, or cpu
+  half: true               # FP16 inference on GPU
+
+tracker:                   # TrackTrack parameters (override ultralytics/cfg/trackers/tracktrack.yaml)
+  track_high_thresh: 0.4   # dets >= this are matched normally and may start new tracks
+  track_low_thresh: 0.1    # dets between low and high only extend existing tracks
+  new_track_thresh: 0.5    # min score to start a new track
+  match_thresh: 0.8        # max match cost; 0.8 survives the box-size jump when a partition hides the legs
+  track_buffer: 30         # processed frames a lost track is kept
+  gmc_method: none         # camera-motion compensation; fixed camera -> none saves several ms per 4K frame
+
+reid:
+  model: ../../py/MediaMTX/resnet50_market1501_aicity156.onnx
+  providers: [CPUExecutionProvider]   # onnxruntime execution providers, tried in order
+  input_size: [128, 256]   # width, height
+  mean: [0.485, 0.456, 0.406]
+  std: [0.226, 0.226, 0.226]
+  # A new (unidentified) track is always embedded once so it gets a person ID. After that, a crop is added to the
+  # person's gallery only when it passes all three quality checks below:
+  min_box_height: 48       # px; smaller crops give unreliable embeddings
+  min_conf: 0.5            # detection confidence
+  max_overlap_iou: 0.3     # box must not overlap another person (the crop would mix two appearances)
+  update_interval: 5       # re-embed an already identified track every N processed frames
+
+gallery:
+  max_embeddings_per_person: 20   # feature bank size per person; oldest is dropped when full
+  match_threshold: 0.65           # cosine similarity needed to give a new track an existing person ID
+  match_metric: max               # max: best single embedding in the bank | mean: bank centroid
+  track_timeout_s: 5.0            # forget a track -> person binding after the track is unseen this long
+  identity_ttl_s: 600.0           # forget a person entirely after unseen this long
+
+display:
+  show: true
+  window_size: [1440, 720]
+  draw_detections: true    # thin green box + confidence for every YOLO detection
+  save_path: null          # e.g. output.mp4 to record the annotated stream
+
+cupola:                    # push identified people to Cupola360 as EVENT API v1.2 ROIs
+  enabled: true
+  server: http://192.168.51.135:3000/
+  # Picks which camera view the boxes are drawn on. The Cupola viewer shows an event only when this equals one of the
+  # camera's `uri`, `relayUri` or `path` fields. Here it is `path` = the MediaMTX stream name (last part of
+  # source.url); the full relay URL does not match. Leave empty to disable the push.
+  camera_url: fa57a71f-d37d-4fbd-a268-6a04e9ff852d
+  resolution: auto         # WxH of the equirectangular stream; auto = taken from the first frame
+  send_interval_s: 0.067     # push rate (~5 Hz)
+  box_ttl_ms: 1000         # a box auto-hides if not refreshed within this time
+
+logging:
+  stats_interval_s: 5.0    # print per-stage timing / FPS / latency this often
