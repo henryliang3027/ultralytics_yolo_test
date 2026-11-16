@@ -1,7 +1,8 @@
 """Real-time person detection, tracking and re-identification pipeline."""
 
+from .camera import CameraStream
 from .capture import FrameSource, GStreamerSource, OpenCVSource, create_frame_source
-from .config import PipelineConfig, load_config
+from .config import CameraConfig, PipelineConfig, load_config
 from .cupola import CupolaEventSink
 from .sinks import ResultSink
 from .detector import PersonDetector
@@ -12,6 +13,8 @@ from .tracker import PersonTracker
 from .visualizer import Visualizer
 
 __all__ = [
+    "CameraConfig",
+    "CameraStream",
     "CupolaEventSink",
     "FrameSource",
     "ResultSink",

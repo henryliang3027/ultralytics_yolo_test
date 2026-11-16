@@ -144,8 +144,10 @@ def people_from_result(result: FrameResult) -> list[tuple]:
 
 
 class CupolaEventSink(ResultSink):
-    def __init__(self, cfg: CupolaConfig):
+    def __init__(self, cfg: CupolaConfig, camera_url: str, name: str = ""):
         self.cfg = cfg
+        self.camera_url = camera_url  # Cupola camera uri / relayUri / path the boxes are drawn on
+        self._tag = f"[cupola {name}]" if name else "[cupola]"
         self._latest = None  # list of (pid, nx1, ny1, nx2, ny2), swapped by reference
         self._resolution = cfg.resolution  # "auto" is replaced by the first frame's size
         self._shown: set[int] = set()  # person IDs currently displayed on the server
@@ -155,26 +157,26 @@ class CupolaEventSink(ResultSink):
         self._thread = None
 
     def start(self) -> bool:
-        if not self.cfg.camera_url:
-            print("[cupola] cupola.camera_url is empty, Cupola push disabled")
+        if not self.camera_url:
+            print(f"{self._tag} cupola_camera_url is empty, Cupola push disabled")
             return False
         try:
             import socketio
         except ImportError:
-            print("[cupola] python-socketio not installed, Cupola push disabled (see README)")
+            print(f"{self._tag} python-socketio not installed, Cupola push disabled (see README)")
             return False
 
         self._sio = socketio.Client(reconnection=True, ssl_verify=False, handle_sigint=False)
 
         @self._sio.event
         def connect():
-            print(f"[cupola] connected to {self.cfg.server}")
+            print(f"{self._tag} connected to {self.cfg.server}, drawing on {self.camera_url}")
             self._sio.emit("registerMeasuringPoint")
             self._need_clear = True
 
         @self._sio.event
         def disconnect(*_):
-            print("[cupola] disconnected")
+            print(f"{self._tag} disconnected")
 
         self._thread = threading.Thread(target=self._run, name="cupola-sender", daemon=True)
         self._thread.start()
@@ -192,7 +194,7 @@ class CupolaEventSink(ResultSink):
             self._thread.join(timeout=2)
         if self._sio is not None and self._sio.connected:
             try:
-                self._emit(build_event(self.cfg.camera_url, self._resolution, [], "SINGLE"))
+                self._emit(build_event(self.camera_url, self._resolution, [], "SINGLE"))
                 self._sio.sleep(0.3)  # emit only queues the packet; let it flush
             except Exception:
                 pass
@@ -208,7 +210,7 @@ class CupolaEventSink(ResultSink):
                 self._sio.connect(self.cfg.server, socketio_path=SOCKETIO_PATH, wait_timeout=5)
                 return True
             except Exception as e:
-                print(f"[cupola] connect to {self.cfg.server} failed: {e}; retrying in 3s")
+                print(f"{self._tag} connect to {self.cfg.server} failed: {e}; retrying in 3s")
                 self._stop.wait(3)
         return False
 
@@ -220,7 +222,7 @@ class CupolaEventSink(ResultSink):
                 continue  # socketio.Client reconnects on its own; resolution known after the first frame
             try:
                 if self._need_clear:
-                    self._emit(build_event(self.cfg.camera_url, self._resolution, [], "SINGLE"))
+                    self._emit(build_event(self.camera_url, self._resolution, [], "SINGLE"))
                     self._shown = set()
                     self._need_clear = False
 
@@ -232,7 +234,7 @@ class CupolaEventSink(ResultSink):
                 current = {p[0] for p in people}
                 roi_list = build_close_rois(sorted(self._shown - current)) + build_rois(people, self.cfg.box_ttl_ms)
                 if roi_list:
-                    self._emit(build_event(self.cfg.camera_url, self._resolution, roi_list))
+                    self._emit(build_event(self.camera_url, self._resolution, roi_list))
                 self._shown = current
             except Exception as e:
-                print(f"[cupola] send error: {e}")
+                print(f"{self._tag} send error: {e}")

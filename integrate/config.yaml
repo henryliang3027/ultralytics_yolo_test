@@ -1,9 +1,22 @@
 # Person detection -> tracking -> Re-ID -> gallery pipeline configuration.
 # Relative paths are resolved against the folder that contains this file.
 
-source:
-  url: rtsp://192.168.51.135:8554/fa57a71f-d37d-4fbd-a268-6a04e9ff852d   # RTSP URL, or a local video file for offline tests
-  backend: opencv          # opencv (FFmpeg, works out of the box) | gstreamer (needs PyGObject + decoder plugins, see README)
+# One entry per camera. The YOLO and Re-ID models are shared; every camera gets its own tracker, gallery (so person
+# IDs are numbered per camera), window, and Cupola view. `python main.py --source a.mp4 b.mp4` replaces the urls in
+# order and runs only as many cameras as sources given.
+cameras:
+  - name: cam1
+    url: rtsp://192.168.51.135:8554/fa57a71f-d37d-4fbd-a268-6a04e9ff852d   # RTSP URL, or a local video file
+    # The Cupola viewer shows an event only when this equals one of the camera's `uri`, `relayUri` or `path` fields.
+    # Here it is `path` = the MediaMTX stream name (last part of url); the full relay URL does not match.
+    # Leave empty to skip the Cupola push for this camera.
+    cupola_camera_url: fa57a71f-d37d-4fbd-a268-6a04e9ff852d
+  - name: cam2
+    url: rtsp://192.168.51.135:8554/76bb2c48-21cb-429a-999e-5afa2e4d9672
+    cupola_camera_url: 76bb2c48-21cb-429a-999e-5afa2e4d9672
+
+source:                    # decoding options shared by every camera
+  backend: opencv         # opencv (FFmpeg, works out of the box) | gstreamer (needs PyGObject + decoder plugins, see README)
   transport: tcp           # tcp (stable) | udp (lower latency, may drop packets on a busy network)
   reconnect_delay_s: 2.0   # wait before reconnecting after the stream drops
   # GStreamer only: depay ! parse ! decode part of the pipeline. H.265 camera -> rtph265depay ! h265parse ! avdec_h265
@@ -11,7 +24,7 @@ source:
 
 detector:
   weights: ../yolo26s.pt
-  imgsz: 1920              # 3840x1920 panorama: people are small, 640 misses many of them
+  imgsz: 1920              # 3840x1920 panorama: people are small, 640 misses many of the
   conf: 0.55                # keep low-score boxes; TrackTrack uses them to keep tracks alive through occlusion
   device: 0                # GPU index, or cpu
   half: true               # FP16 inference on GPU
@@ -48,17 +61,13 @@ display:
   show: true
   window_size: [1440, 720]
   draw_detections: true    # thin green box + confidence for every YOLO detection
-  save_path: null          # e.g. output.mp4 to record the annotated stream
+  save_path: null          # e.g. output.mp4 to record; with several cameras -> output_cam1.mp4, output_cam2.mp4
 
-cupola:                    # push identified people to Cupola360 as EVENT API v1.2 ROIs
+cupola:                    # push identified people to Cupola360 as EVENT API v1.2 ROIs (target view: cameras[].cupola_camera_url)
   enabled: true
   server: http://192.168.51.135:3000/
-  # Picks which camera view the boxes are drawn on. The Cupola viewer shows an event only when this equals one of the
-  # camera's `uri`, `relayUri` or `path` fields. Here it is `path` = the MediaMTX stream name (last part of
-  # source.url); the full relay URL does not match. Leave empty to disable the push.
-  camera_url: fa57a71f-d37d-4fbd-a268-6a04e9ff852d
   resolution: auto         # WxH of the equirectangular stream; auto = taken from the first frame
-  send_interval_s: 0.067     # push rate (~5 Hz)
+  send_interval_s: 0.067     # push rate (~15 Hz)
   box_ttl_ms: 1000         # a box auto-hides if not refreshed within this time
 
 logging:

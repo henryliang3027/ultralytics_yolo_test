@@ -2,31 +2,35 @@
 
 從 RTSP 串流讀取 3840×1920 全景畫面，依序做人員偵測（YOLO）、多目標追蹤（TrackTrack）、外觀特徵擷取（Re-ID），再由 Gallery 維護每個人的長期 ID。人被隔板擋住、走出畫面後再回來時，仍能拿回原本的 ID。
 
+可以同時處理多台攝影機（`config.yaml` 的 `cameras` 清單）。YOLO 和 Re-ID 模型只載入一份，所有攝影機共用；追蹤器和 Gallery 則每台攝影機各一份，所以 person ID 是**各攝影機分開編號**的（同一個人在 cam1 是 ID 2，在 cam2 可能是 ID 5）。
+
 參考：`py/MediaMTX/yolov8s_reidnet_neuron_rtsp_client_webcam.py`（MediaTek APU 版本）。本版本改在 AMD GPU 上以 Ultralytics 執行偵測，並把每個功能拆成獨立模組。
 
 ## 處理流程
 
 ```
-              ┌──────────────── 背景執行緒 ────────────────┐
-RTSP 串流 ──▶ │ FrameSource：解碼，只保留「最新一張」畫格      │
-              └──────────────────────┬──────────────────────┘
-                                     │ FramePacket（影像、畫格編號、解碼時間）
-                                     ▼
-                     ┌── 主執行緒，每張畫格 ─────────────────────────────┐
-                     │ 1. PersonDetector   YOLO 偵測人  → Detections      │
-                     │ 2. PersonTracker    TrackTrack   → 每個框的 track ID│
-                     │ 3. ReIDExtractor    裁切 → 256 維外觀特徵（ONNX）   │
-                     │ 4. IdentityGallery  track ID → 長期 person ID       │
-                     │ 5. Visualizer       畫框、ID、FPS、延遲             │
-                     └────────────────────────────────────────────────────┘
-                                     │
-                                     ▼
-          ┌──────────────────────────┼──────────────────────────┐
-          ▼                          ▼                          ▼
-   視窗顯示 / 錄影（mp4）     CupolaEventSink（ResultSink）     （之後可加其他輸出）
-                             背景執行緒，約 5 Hz 推送 ROI
-                             到 Cupola360 server
+cam1 RTSP ──▶ FrameSource（背景執行緒，只留最新一張）──┐
+cam2 RTSP ──▶ FrameSource（背景執行緒，只留最新一張）──┤
+                                                       │ 每台有新畫格的攝影機各取一張
+                                                       ▼
+                        ┌── 主執行緒（PersonPipeline）─────────────────────┐
+                        │ 1. PersonDetector  一次 batch 推論所有畫格（共用）│
+                        └───────────────┬──────────────────┬──────────────┘
+                                        ▼                  ▼
+                        ┌─ CameraStream cam1 ─┐   ┌─ CameraStream cam2 ─┐
+                        │ 2. PersonTracker    │   │ 2. PersonTracker    │  每台各自一份
+                        │ 3. ReIDExtractor ◀──┼───┼── 共用同一個模型    │
+                        │ 4. IdentityGallery  │   │ 4. IdentityGallery  │  每台各自一份
+                        │ 5. Visualizer       │   │ 5. Visualizer       │
+                        └──────────┬──────────┘   └──────────┬──────────┘
+                                   ▼                         ▼
+                  視窗「pipeline cam1」/ 錄影       視窗「pipeline cam2」/ 錄影
+                  CupolaEventSink → cam1 的畫面     CupolaEventSink → cam2 的畫面
 ```
+
+只有一台攝影機時，流程相同，只是 batch 裡只有一張畫格。
+
+**為什麼這樣分：** 模型不記得前一張畫格（輸入影像、輸出結果），所以可以共用，GPU 記憶體只用一份，而且一次 batch 推論兩張比分開推論兩次快。追蹤器和 Gallery 會記住「上一張畫格的人在哪、長什麼樣」，兩台攝影機共用會把兩個房間的人混在一起，所以每台各一份，放在 `camera.py` 的 `CameraStream` 裡。
 
 ### 1. 讀取串流：只保留最新畫格
 
@@ -78,10 +82,11 @@ integrate/
     ├── tracker.py           # 追蹤模組（TrackTrack）
     ├── reid.py              # Re-ID 模組（ONNX Runtime）
     ├── gallery.py           # Gallery 模組（長期身分）
+    ├── camera.py            # CameraStream：一台攝影機自己的狀態（來源、追蹤器、Gallery、輸出、統計）
     ├── visualizer.py        # 繪圖
     ├── sinks.py             # 輸出介面 ResultSink：每張畫格的結果交給所有已註冊的輸出
     ├── cupola.py            # Cupola360 EVENT API 推送（ResultSink 實作）
-    └── pipeline.py          # 串起所有模組的主流程
+    └── pipeline.py          # 主流程：共用模型、batch 偵測，再交給各攝影機
 ```
 
 ### 設計模式
@@ -90,7 +95,7 @@ integrate/
 |---|---|---|
 | **Strategy** | `capture.py` 的 `FrameSource` | OpenCV 和 GStreamer 實作同一個介面，換後端不影響其他模組 |
 | **Factory** | `create_frame_source()` | 依 `source.backend` 建立對應的讀取器 |
-| **Facade** | `pipeline.py` 的 `PersonPipeline` | 對外只有 `run()` / `process()`，內部協調各模組 |
+| **Facade** | `pipeline.py` 的 `PersonPipeline` | 對外只有 `run()` / `stop()`，內部協調各模組和各攝影機 |
 | **Observer** | `sinks.py` 的 `ResultSink` | 每張畫格處理完後通知所有輸出（目前是 Cupola）；新增輸出不用改主流程 |
 | **單一職責** | 每個模組一個類別 | 偵測、追蹤、Re-ID、Gallery 互不依賴，透過 `types.py` 的資料結構溝通，可以單獨替換或測試 |
 
@@ -119,29 +124,35 @@ pvenv/bin/python -m pip install ultralytics onnxruntime python-socketio requests
 ```bash
 cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 
-# 讀 config.yaml 中的 RTSP 串流，開視窗顯示（按 q 結束）
+# 讀 config.yaml 中所有攝影機的 RTSP 串流，每台一個視窗（按 q 結束）
 ../pvenv/bin/python main.py
 
 # 不開視窗，把結果錄成影片（Ctrl+C 結束，影片仍會正常存好）
+# 多台攝影機時每台一個檔案：output_cam1.mp4、output_cam2.mp4
 ../pvenv/bin/python main.py --no-show --save output.mp4
 
 # 用本機影片離線測試（會照影片原本的 fps 播放，模擬即時串流）
+# 給幾個來源就跑幾台：依序取代 cameras 清單的 url，空白或逗號分隔都可以
 ../pvenv/bin/python main.py --source ../videos/51_203_output20261106_095222.mp4
+../pvenv/bin/python main.py --source ../videos/51_203_output20261106_095222.mp4 ../videos/51_205_output20261106_095222.mp4
+
+# 用影片測試時不要把框推到 Cupola 的真實攝影機畫面上
+../pvenv/bin/python main.py --source a.mp4 b.mp4 --no-cupola
 
 # 指定其他設定檔、改用 GStreamer 讀取
 ../pvenv/bin/python main.py --config my_config.yaml --backend gstreamer
 ```
 
-每隔 `logging.stats_interval_s` 秒會印出一行統計：
+每隔 `logging.stats_interval_s` 秒，每台攝影機各印一行統計：
 
 ```
-[stats] 15.6 fps | detect 19.1ms track 0.8ms reid 14.8ms gallery 0.0ms | latency 49ms | dropped 7 frames | people 8
+[stats cam1] 15.6 fps | detect 19.1ms track 0.8ms reid 14.8ms gallery 0.0ms | latency 49ms | dropped 7 frames | people 8
 ```
 
 | 欄位 | 意義 |
 |---|---|
 | `fps` | 每秒實際處理的畫格數 |
-| `detect` / `track` / `reid` / `gallery` | 各階段平均耗時 |
+| `detect` / `track` / `reid` / `gallery` | 各階段平均耗時。`detect` 是整個 batch（所有攝影機）一次推論的時間 |
 | `latency` | 從畫格解碼完成到結果產生的時間（不含網路傳輸和攝影機編碼） |
 | `dropped` | 為了維持即時而跳過的畫格數 |
 | `people` | Gallery 中目前記得的人數 |
@@ -152,6 +163,11 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 |---|---|---|---|
 | RTSP 3840×1920 @ 15 fps，畫面中 8–10 人 | 約 15 fps（跟得上串流） | 約 50 ms | detect 19 ms、Re-ID 12–17 ms、track < 1 ms |
 | 本機影片 @ 29 fps，同時錄影 | 約 21 fps | 約 40 ms | detect 18.5 ms、Re-ID 約 5 ms |
+| 兩支本機影片 @ 29 fps，不開視窗 | 每台約 20–23 fps | 50–70 ms | detect（batch 2）29–32 ms、Re-ID 每台 4–12 ms |
+| 兩支本機影片 @ 29 fps，開兩個視窗 | 每台約 13 fps | 60–80 ms | 兩張 4K 畫面的繪圖和顯示也要花時間 |
+| 兩支本機影片 @ 29 fps，同時錄兩支影片 | 每台約 9 fps | 60–100 ms | 4K 影片編碼最花時間 |
+
+兩台攝影機 batch 推論約 30 ms，比分開推論兩次（2 × 19 ms）快。實際的攝影機是 15 fps；不錄影時，兩台都跟得上。
 
 在本機影片 `51_203_output20261106_095222.mp4` 上，一名穿黑衣、多次被隔板擋住的人（包含被完全擋住約 4 秒），追蹤器從第 22 幀起給了 5 個不同的 track ID；經過 Gallery 後，全部對應到同一個 person ID。他在影片開頭穿過全景左右接縫的那一段仍被當成另一個人（見「已知限制」）。
 
@@ -195,20 +211,30 @@ gst-inspect-1.0 h264parse avdec_h264 vah264dec
 `config.yaml`：
 
 ```yaml
-cupola:
+cameras:
+  - name: cam1
+    url: rtsp://192.168.51.135:8554/fa57a71f-d37d-4fbd-a268-6a04e9ff852d
+    cupola_camera_url: fa57a71f-d37d-4fbd-a268-6a04e9ff852d   # MediaMTX 串流名稱，不是完整的 RTSP URL
+  - name: cam2
+    url: rtsp://192.168.51.135:8554/76bb2c48-21cb-429a-999e-5afa2e4d9672
+    cupola_camera_url: 76bb2c48-21cb-429a-999e-5afa2e4d9672
+
+cupola:                    # 所有攝影機共用的推送設定
   enabled: true
   server: http://192.168.51.135:3000/
-  camera_url: fa57a71f-d37d-4fbd-a268-6a04e9ff852d   # MediaMTX 串流名稱，不是完整的 RTSP URL
   resolution: auto         # 從第一張畫格取得，例如 3840x1920
-  send_interval_s: 0.2     # 約 5 Hz
+  send_interval_s: 0.067   # 約 15 Hz
   box_ttl_ms: 1000
 ```
 
-- `camera_url` 決定框要畫在哪台攝影機的畫面上。Cupola 前端只有在它**完全等於**攝影機的 `uri`、`relayUri` 或 `path` 其中一個欄位時，才會顯示（前端程式的 `getCameraUris`）。
-  - 這台攝影機要用 `path`，也就是 MediaMTX 的串流名稱（`source.url` 最後一段的 UUID）。
+每台攝影機有自己的 `CupolaEventSink`（自己的連線），推到自己的 `cupola_camera_url`。Cupola 前端只顯示「目前正在看的那台攝影機」的事件，所以兩台的 person ID 都從 1 開始也不會互相干擾。
+
+- `cupola_camera_url` 決定框要畫在哪台攝影機的畫面上。Cupola 前端只有在它**完全等於**攝影機的 `uri`、`relayUri` 或 `path` 其中一個欄位時，才會顯示（前端程式的 `getCameraUris`）。
+  - 這裡的攝影機要用 `path`，也就是 MediaMTX 的串流名稱（`url` 最後一段的 UUID）。
   - 完整的 relay URL `rtsp://192.168.51.135:8554/fa57a71f-...` **對不上**：訊息會被 server 收下，但畫面上不會出現框，也不會有任何錯誤訊息。
-  - 換攝影機時，把 `camera_url` 改成新攝影機的串流名稱（可以從 MediaMTX API `http://<host>:9997/v3/paths/list` 查到）。
-- 留空字串或 `enabled: false` 會停用推送。
+  - 新增或更換攝影機時，把 `cupola_camera_url` 設成新攝影機的串流名稱（可以從 MediaMTX API `http://<host>:9997/v3/paths/list` 查到）。
+- 某台的 `cupola_camera_url` 留空，那台就不推送；`enabled: false` 或命令列 `--no-cupola` 會全部停用。
+- 用 `--source` 換成本機影片時，第 i 支影片仍推到第 i 台攝影機的 Cupola 畫面。影片不是那台攝影機的即時畫面，框會對不上，所以測試時建議加 `--no-cupola`。
 - 框座標以全景畫面正規化成 0~1，所以來源必須是同一台攝影機、未裁切的 2:1 全景畫面。
 - 推送的是 Gallery 的 **person ID**（不是追蹤器的 track ID），所以人被擋住再出現時，Cupola 上的 ID 也不會變。還沒拿到 person ID 的 track 不推送。
 - 兩個 track 短暫對應到同一個 person ID 時（例如隔板後的上半身框和新的全身框），只送面積較大的框，避免同一個 ROI id 在一則訊息裡出現兩次。
@@ -224,6 +250,7 @@ cupola:
 
 ## 已知限制
 
+- **跨攝影機不共用身分**：每台攝影機各自一個 Gallery，同一個人在不同攝影機會拿到不同的 person ID。要跨攝影機認人，需要改成共用 Gallery（track ID 要加上攝影機名稱區分，「同一時間只能在一個地方」的規則也要調整，因為兩台的視野可能重疊）。
 - **全景接縫**：人穿過畫面左右邊界時，追蹤器會斷開；Re-ID 有時接得回來，但邊緣影像變形，不一定成功。
 - **第一次比對只用一張特徵**：新 track 一出現就用第一張裁切決定身分。如果那一張被遮住大半，可能配錯人或建立新的人。
 - **Re-ID 在 CPU 上執行**：pip 版 `onnxruntime` 只有 CPU。畫面中人多時，`reid` 時間會隨人數增加。

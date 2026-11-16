@@ -10,8 +10,17 @@ from ultralytics.utils import YAML  # bundled YAML loader, avoids an extra PyYAM
 
 
 @dataclass
+class CameraConfig:
+    name: str  # used in window titles, log lines and per-camera recording file names
+    url: str  # RTSP URL or local video file
+    cupola_camera_url: str = ""  # Cupola camera uri / relayUri / path to draw on; empty = no Cupola push
+
+
+@dataclass
 class SourceConfig:
-    url: str
+    """Decoding options shared by every camera; `url` is filled in per camera."""
+
+    url: str = ""
     backend: str = "opencv"
     transport: str = "tcp"
     reconnect_delay_s: float = 2.0
@@ -71,7 +80,6 @@ class DisplayConfig:
 class CupolaConfig:
     enabled: bool = False
     server: str = ""
-    camera_url: str = ""
     resolution: str = "auto"
     send_interval_s: float = 0.2
     box_ttl_ms: int = 1000
@@ -84,6 +92,7 @@ class LoggingConfig:
 
 @dataclass
 class PipelineConfig:
+    cameras: list[CameraConfig]
     source: SourceConfig
     detector: DetectorConfig
     tracker: TrackerConfig
@@ -116,7 +125,16 @@ def load_config(path: str | Path) -> PipelineConfig:
     path = Path(path).resolve()
     raw = YAML.load(path) or {}
     base = path.parent
+    cameras = [_build(CameraConfig, c) for c in raw.get("cameras") or []]
+    if not cameras:
+        raise ValueError("config needs at least one entry under `cameras`")
+    names = [c.name for c in cameras]
+    if len(set(names)) != len(names):
+        raise ValueError(f"camera names must be unique, got {names}")
+    for cam in cameras:
+        cam.url = _resolve(cam.url, base)  # URLs are kept as is, file paths become absolute
     cfg = PipelineConfig(
+        cameras=cameras,
         source=_build(SourceConfig, raw.get("source")),
         detector=_build(DetectorConfig, raw.get("detector")),
         tracker=_build(TrackerConfig, raw.get("tracker")),
@@ -128,7 +146,6 @@ def load_config(path: str | Path) -> PipelineConfig:
     )
     cfg.detector.weights = _resolve(cfg.detector.weights, base)
     cfg.reid.model = _resolve(cfg.reid.model, base)
-    cfg.source.url = _resolve(cfg.source.url, base)  # URLs are kept as is, file paths become absolute
     if cfg.display.save_path:
         cfg.display.save_path = _resolve(cfg.display.save_path, base)
     return cfg
