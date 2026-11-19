@@ -5,14 +5,29 @@ then scored with TrackEval.
 
 ## CVAT (local, docker)
 
-`cvat/` is CVAT v2.83.0 (`git clone --branch v2.83.0 https://github.com/cvat-ai/cvat.git`), not tracked in this repo.
+`cvat/` is CVAT v2.83.0. It is not tracked in this repo. To set it up the first time:
+
+```bash
+cd groundtruth
+git clone --branch v2.83.0 https://github.com/cvat-ai/cvat.git cvat
+```
+
+Start, stop and check it:
 
 ```bash
 cd groundtruth/cvat
 CVAT_VERSION=v2.83.0 docker compose up -d       # start; UI at http://localhost:8080
-docker exec -it cvat_server bash -ic 'python3 ~/manage.py createsuperuser'   # first time only
+docker exec -it cvat_server bash -ic 'python3 ~/manage.py createsuperuser'   # first time only: make a login
+docker compose ps                               # all cvat_* containers should be "running"
+docker compose logs -f cvat_server              # see server logs if the UI does not load
 docker compose stop                             # stop (data is kept in docker volumes)
 ```
+
+- `CVAT_VERSION` already defaults to `v2.83.0` in this checkout's `docker-compose.yml`. Passing it just makes the
+  version explicit.
+- `docker compose down` also keeps the data. `docker compose down -v` deletes the volumes, which removes every task
+  and annotation.
+- The first start takes a few minutes. Open the UI after `cvat_server` has finished its migrations.
 
 ## 1. Pre-annotation from tracklets
 
@@ -67,11 +82,22 @@ so it hides ID errors and the score comes out too high.
 
 ## 4. IDF1
 
+Run from `groundtruth/`. You need `gt/gt.txt` from step 2 and the `pred/` files from step 3.
+
 ```bash
+cd groundtruth
 D=51_203_20261111_153342_153431
 ../pvenv/bin/python eval_idf1.py --gt $D/gt/gt.txt --pred $D/pred/${D}_person.txt   # whole system
 ../pvenv/bin/python eval_idf1.py --gt $D/gt/gt.txt --pred $D/pred/${D}_track.txt    # tracker only
 ```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--gt` | (required) | MOT ground-truth file (`frame,id,x,y,w,h,conf,...`, frames start at 1). |
+| `--pred` | (required) | MOT prediction file in the same format. |
+| `--iou` | `0.5` | A GT box and a predicted box match in a frame when their IoU is at least this value. |
+
+GT rows with `conf=0` are ignore regions. They are dropped, along with any predicted boxes that overlap them.
 
 The script prints the overall IDF1, IDP and IDR, then one row per GT person with these columns:
 
