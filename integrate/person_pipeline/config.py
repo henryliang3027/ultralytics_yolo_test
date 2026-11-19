@@ -14,6 +14,8 @@ class CameraConfig:
     name: str  # used in window titles, log lines and per-camera recording file names
     url: str  # RTSP URL or local video file
     cupola_camera_url: str = ""  # Cupola camera uri / relayUri / path to draw on; empty = no Cupola push
+    camera_id: str = ""  # tracklet contract camera id (e.g. "51_203"); empty = use `name`
+    recording_dir: str = ""  # Cupola recording folder of this camera (record mode); relative to record.recordings_root
 
 
 @dataclass
@@ -86,6 +88,18 @@ class CupolaConfig:
 
 
 @dataclass
+class RecordConfig:
+    """Record mode (record.py): closed tracklets from Cupola recordings -> tracklets.jsonl."""
+
+    recordings_root: str = ""  # folder holding one sub-folder of .ts segments per camera
+    out_dir: str = "tracklets"  # tracklets.jsonl, summary.json and the per-day track id registry go here
+    timezone: str = "Asia/Taipei"  # segment file names are local start times in this zone
+    max_embeddings: int = 20  # embeddings per tracklet, picked evenly over the track's life
+    reid_model_version: str = ""  # empty = Re-ID ONNX file name without extension
+    vector_decimals: int = 6  # rounding of embedding values in the JSON (keeps the file small)
+
+
+@dataclass
 class LoggingConfig:
     stats_interval_s: float = 5.0
 
@@ -101,6 +115,7 @@ class PipelineConfig:
     display: DisplayConfig
     cupola: CupolaConfig
     logging: LoggingConfig
+    record: RecordConfig
 
 
 def _build(cls, data: dict | None):
@@ -143,9 +158,12 @@ def load_config(path: str | Path) -> PipelineConfig:
         display=_build(DisplayConfig, raw.get("display")),
         cupola=_build(CupolaConfig, raw.get("cupola")),
         logging=_build(LoggingConfig, raw.get("logging")),
+        record=_build(RecordConfig, raw.get("record")),
     )
     cfg.detector.weights = _resolve(cfg.detector.weights, base)
     cfg.reid.model = _resolve(cfg.reid.model, base)
+    cfg.record.recordings_root = _resolve(cfg.record.recordings_root, base)
+    cfg.record.out_dir = _resolve(cfg.record.out_dir, base)
     if cfg.display.save_path:
         cfg.display.save_path = _resolve(cfg.display.save_path, base)
     return cfg

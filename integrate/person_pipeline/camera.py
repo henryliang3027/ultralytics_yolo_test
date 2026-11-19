@@ -17,6 +17,7 @@ from .capture import FrameSource, create_frame_source
 from .config import CameraConfig, PipelineConfig
 from .cupola import CupolaEventSink
 from .gallery import IdentityGallery
+from .recorder import VideoRecorder
 from .reid import ReIDExtractor
 from .sinks import ResultSink
 from .tracker import PersonTracker
@@ -51,7 +52,7 @@ class CameraStream:
         self.source: FrameSource | None = None
         self.window = f"pipeline {cam.name}"
         self.save_path = save_path
-        self._writer = None
+        self._writer: VideoRecorder | None = None
         self._last_embedded: dict[int, int] = {}  # track id -> processed-frame index of its last embedding
         self._frame_idx = 0
         # stats
@@ -76,7 +77,7 @@ class CameraStream:
         for sink in self.sinks:
             sink.stop()
         if self._writer is not None:
-            self._writer.release()
+            self._writer.close()  # waits for the queued frames, then finalizes the file
 
     @property
     def finished(self) -> bool:
@@ -92,7 +93,9 @@ class CameraStream:
         return packet
 
     # ---- one frame (after the shared YOLO call) ----
-    def process(self, packet: FramePacket, dets: Detections, detect_ms: float) -> FrameResult:
+    def process(self, packet: FramePacket, dets: Detections, detect_ms: float, now: float | None = None) -> FrameResult:
+        """Track, embed and identify one frame. `now` (seconds) drives the gallery timeouts; defaults to the wall
+        clock, record mode passes the video time so timeouts follow the recording, not the processing speed."""
         timings = {"detect": detect_ms}
         t = time.perf_counter()
         track_ids = self.tracker.update(dets, packet.image)
@@ -109,14 +112,14 @@ class CameraStream:
         t = time.perf_counter()
         visible = [int(t_) for t_ in track_ids if t_ >= 0]
         boxes = {int(t_): dets.xyxy[i] for i, t_ in enumerate(track_ids) if t_ >= 0}
-        mapping = self.gallery.update(visible, embeddings, time.monotonic(), boxes)
+        mapping = self.gallery.update(visible, embeddings, time.monotonic() if now is None else now, boxes)
         person_ids = [mapping.get(int(t_)) if t_ >= 0 else None for t_ in track_ids]
         timings["gallery"] = (time.perf_counter() - t) * 1000
 
         self._frame_idx += 1
         if self._frame_idx % 300 == 0:  # drop bookkeeping for tracks the gallery has forgotten
             self._last_embedded = {k: v for k, v in self._last_embedded.items() if self.gallery.person_of(k) is not None}
-        return FrameResult(packet, dets, track_ids, person_ids, timings)
+        return FrameResult(packet, dets, track_ids, person_ids, timings, embeddings)
 
     def _select_for_reid(self, dets: Detections, track_ids: np.ndarray) -> list[int]:
         """Pick the detection rows worth a Re-ID embedding this frame.
@@ -172,9 +175,8 @@ class CameraStream:
             if self.save_path:
                 if self._writer is None:
                     h, w = vis.shape[:2]
-                    out_fps = self.source.fps or 15.0
-                    self._writer = cv2.VideoWriter(self.save_path, cv2.VideoWriter_fourcc(*"mp4v"), out_fps, (w, h))
-                self._writer.write(vis)
+                    self._writer = VideoRecorder(self.save_path, self.source.fps or 15.0, (w, h), self.name)
+                self._writer.write(vis)  # encoded on the recorder's thread
             if disp.show:
                 cv2.imshow(self.window, vis)
 

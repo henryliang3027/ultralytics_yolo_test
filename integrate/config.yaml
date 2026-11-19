@@ -11,9 +11,13 @@ cameras:
     # Here it is `path` = the MediaMTX stream name (last part of url); the full relay URL does not match.
     # Leave empty to skip the Cupola push for this camera.
     cupola_camera_url: fa57a71f-d37d-4fbd-a268-6a04e9ff852d
+    camera_id: "51_203"                                  # id in exported tracklets (record mode)
+    recording_dir: fa57a71f-d37d-4fbd-a268-6a04e9ff852d   # under record.recordings_root
   - name: cam2
     url: rtsp://192.168.51.135:8554/76bb2c48-21cb-429a-999e-5afa2e4d9672
     cupola_camera_url: 76bb2c48-21cb-429a-999e-5afa2e4d9672
+    camera_id: "51_205"
+    recording_dir: 76bb2c48-21cb-429a-999e-5afa2e4d9672
 
 source:                    # decoding options shared by every camera
   backend: opencv         # opencv (FFmpeg, works out of the box) | gstreamer (needs PyGObject + decoder plugins, see README)
@@ -61,14 +65,21 @@ display:
   show: true
   window_size: [1440, 720]
   draw_detections: true    # thin green box + confidence for every YOLO detection
-  save_path: null          # e.g. output.mp4 to record; with several cameras -> output_cam1.mp4, output_cam2.mp4
-
+  save_path: ../results/videos   # save annotated frames to this folder; empty = don't save
 cupola:                    # push identified people to Cupola360 as EVENT API v1.2 ROIs (target view: cameras[].cupola_camera_url)
   enabled: true
   server: http://192.168.51.135:3000/
   resolution: auto         # WxH of the equirectangular stream; auto = taken from the first frame
   send_interval_s: 0.067     # push rate (~15 Hz)
   box_ttl_ms: 1000         # a box auto-hides if not refreshed within this time
+
+record:                    # record mode: python record.py --start ... --end ...  (closed tracklets -> tracklets.jsonl)
+  recordings_root: /home/ubuntu/Documents/Cupola_Patrol/20261006/amd64/cupola360-factory-web-amd64_2.2609.3/cupola360-factory-web-amd64/recordings
+  out_dir: ../results/tracklets   # tracklets.jsonl, summary.json, track_id_registry.json
+  timezone: Asia/Taipei    # segment file names are local start times
+  max_embeddings: 20       # per tracklet, spread evenly over the track
+  reid_model_version: ""   # empty = Re-ID ONNX file name (resnet50_market1501_aicity156)
+  vector_decimals: 6
 
 logging:
   stats_interval_s: 5.0    # print per-stage timing / FPS / latency this often

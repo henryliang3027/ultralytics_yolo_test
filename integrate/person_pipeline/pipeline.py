@@ -12,19 +12,30 @@ from pathlib import Path
 import cv2
 
 from .camera import CameraStream
-from .config import PipelineConfig
+from .config import CameraConfig, PipelineConfig
 from .detector import PersonDetector
 from .reid import ReIDExtractor
 
 IDLE_SLEEP_S = 0.002  # no camera has a new frame yet: wait this long before polling again
 
 
-def _save_path(base: str | None, name: str, n_cameras: int) -> str | None:
-    """output.mp4 -> output.mp4 for one camera, output_cam1.mp4 / output_cam2.mp4 for several."""
-    if not base or n_cameras == 1:
+def _save_path(base: str | None, cam: CameraConfig, n_cameras: int) -> str | None:
+    """output.mp4 -> output.mp4 for one camera, output_cam1.mp4 / output_cam2.mp4 for several.
+    A path without a file extension is a folder: each camera is saved as <source video name>.mp4 in it
+    (live streams, which have no file name, use the camera name)."""
+    if not base:
         return base
     p = Path(base)
-    return str(p.with_name(f"{p.stem}_{name}{p.suffix}"))
+    if not p.suffix:
+        src = Path(cam.url)
+        stem = src.stem if "://" not in cam.url and src.is_file() else cam.name
+        out = p / f"{stem}.mp4"
+        if src.is_file() and out.resolve() == src.resolve():  # never overwrite the source video
+            out = p / f"{stem}_annotated.mp4"
+        return str(out)
+    if n_cameras == 1:
+        return base
+    return str(p.with_name(f"{p.stem}_{cam.name}{p.suffix}"))
 
 
 class PersonPipeline:
@@ -36,7 +47,7 @@ class PersonPipeline:
         self.detector.warmup(batch=n)
         self.reid = ReIDExtractor(cfg.reid)
         self.cameras = [
-            CameraStream(cam, cfg, self.reid, _save_path(cfg.display.save_path, cam.name, n)) for cam in cfg.cameras
+            CameraStream(cam, cfg, self.reid, _save_path(cfg.display.save_path, cam, n)) for cam in cfg.cameras
         ]
         self._running = False
 

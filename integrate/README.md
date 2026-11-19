@@ -171,6 +171,25 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 
 在本機影片 `51_203_output20261106_095222.mp4` 上，一名穿黑衣、多次被隔板擋住的人（包含被完全擋住約 4 秒），追蹤器從第 22 幀起給了 5 個不同的 track ID；經過 Gallery 後，全部對應到同一個 person ID。他在影片開頭穿過全景左右接縫的那一段仍被當成另一個人（見「已知限制」）。
 
+## 錄影模式：匯出 tracklets 給跨攝影機端（`record.py`）
+
+從 Cupola 的錄影檔（`record.recordings_root` 底下每台一個資料夾的 `.ts` 片段）跑完整 pipeline，把**結束的 track**
+依共用合約 `tracklet_schema` v0.2（github.com/entienlin/reid-heatmap `packages/tracklet_schema`）寫成
+`tracklets.jsonl`，一行一個 `Tracklet.model_dump_json()`。
+
+```bash
+pip install -e <reid-heatmap>/packages/tracklet_schema   # 用合約套件驗證；沒裝時用 person_pipeline/tracklet_contract.py 的副本
+python record.py --start "2026-11-11 15:32:00" --end "2026-11-11 15:52:00" --out ../results/tracklets/20261111_1532-1552
+python record.py --validate ../results/tracklets/20261111_1532-1552/tracklets.jsonl
+```
+
+- 時間用 Asia/Taipei 本地時間指定；每個畫格的 UTC 時間 = 片段檔名時間（轉 UTC）+ 片段內 frame_index / fps（合約規則）。
+- 每一格都處理，不像即時模式會丟格。錄影是 15 fps，`track_buffer: 30` = 約 2 秒沒看到才結束 track。
+- 一個 tracklet = 一條原始 tracker track，不做合併或接回；embedding 最多 20 個，平均分布在整條 track 上。
+- `camera_id` 取 `cameras[].camera_id`（51_203 / 51_205）。`local_track_id` = 本次偏移量 + tracker ID；偏移量記在
+  `record.out_dir/track_id_registry.json`（每台、每個本地日期），所以重開程式也不會在同一天重複。
+- 輸出資料夾已有 `tracklets.jsonl` 時會停下，要覆蓋請加 `--overwrite`；同時另存 `summary.json`。
+
 ## 讀取後端：OpenCV 與 GStreamer
 
 | | `opencv`（預設） | `gstreamer` |

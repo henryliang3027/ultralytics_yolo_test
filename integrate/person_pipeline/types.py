@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -41,3 +41,4 @@ class FrameResult:
     track_ids: np.ndarray  # (N,) int, -1 = not tracked
     person_ids: list  # (N,) int | None: gallery identity, None = tracked but not identified yet
     timings_ms: dict  # stage name -> milliseconds
+    embeddings: dict = field(default_factory=dict)  # track id -> (D,) Re-ID embedding computed this frame
