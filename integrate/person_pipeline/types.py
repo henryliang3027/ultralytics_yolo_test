@@ -42,3 +42,4 @@ class FrameResult:
     person_ids: list  # (N,) int | None: gallery identity, None = tracked but not identified yet
     timings_ms: dict  # stage name -> milliseconds
     embeddings: dict = field(default_factory=dict)  # track id -> (D,) Re-ID embedding computed this frame
+    clean_tracks: set = field(default_factory=set)  # track ids whose crop passed the Re-ID quality checks this frame

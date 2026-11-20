@@ -101,16 +101,27 @@ class CameraStream:
         return packet
 
     # ---- one frame (after the shared YOLO call) ----
-    def process(self, packet: FramePacket, dets: Detections, detect_ms: float, now: float | None = None) -> FrameResult:
+    def process(
+        self,
+        packet: FramePacket,
+        dets: Detections,
+        detect_ms: float,
+        now: float | None = None,
+        tick: bool | None = None,
+    ) -> FrameResult:
         """Track, embed and identify one frame. `now` (seconds) drives the gallery timeouts; defaults to the wall
-        clock, record mode passes the video time so timeouts follow the recording, not the processing speed."""
+        clock, record mode passes the video time so timeouts follow the recording, not the processing speed.
+
+        `tick`: None = each identified track is re-embedded on its own timer (every `update_interval` frames).
+        True / False = one schedule for every track and camera: identified tracks are embedded only on tick frames
+        (the track-update send times), so every sent record carries an embedding of that same frame."""
         timings = {"detect": detect_ms}
         t = time.perf_counter()
         track_ids = self.tracker.update(dets, packet.image)
         timings["track"] = (time.perf_counter() - t) * 1000
 
         t = time.perf_counter()
-        rows = self._select_for_reid(dets, track_ids)
+        rows, clean = self._select_for_reid(dets, track_ids, tick)
         feats = self.reid.extract(packet.image, dets.xyxy[rows])
         embeddings = {int(track_ids[r]): f for r, f in zip(rows, feats)}
         for tid in embeddings:
@@ -127,35 +138,41 @@ class CameraStream:
         self._frame_idx += 1
         if self._frame_idx % 300 == 0:  # drop bookkeeping for tracks the gallery has forgotten
             self._last_embedded = {k: v for k, v in self._last_embedded.items() if self.gallery.person_of(k) is not None}
-        return FrameResult(packet, dets, track_ids, person_ids, timings, embeddings)
+        return FrameResult(packet, dets, track_ids, person_ids, timings, embeddings, clean)
 
-    def _select_for_reid(self, dets: Detections, track_ids: np.ndarray) -> list[int]:
-        """Pick the detection rows worth a Re-ID embedding this frame.
+    def _select_for_reid(self, dets: Detections, track_ids: np.ndarray, tick: bool | None = None) -> tuple[list[int], set]:
+        """Pick the detection rows worth a Re-ID embedding this frame; also return the track ids with a clean crop.
 
         - Unidentified track: always (it needs one embedding to get a person ID).
-        - Identified track: every `update_interval` frames, only for clean crops (big enough, confident,
-          not overlapping another person) so the feature bank is not polluted.
+        - Identified track: only for clean crops (big enough, confident, not overlapping another person) so the
+          feature bank is not polluted, and only when due: every `update_interval` frames per track (tick None),
+          or on tick frames (tick True/False, see process()).
         """
         rc = self.cfg.reid
         iou = _pairwise_iou(dets.xyxy) if len(dets) > 1 else np.zeros((len(dets), len(dets)))
         heights = dets.xyxy[:, 3] - dets.xyxy[:, 1]
         widths = dets.xyxy[:, 2] - dets.xyxy[:, 0]
-        rows = []
+        rows, clean_ids = [], set()
         for i, tid in enumerate(track_ids):
             if tid < 0 or heights[i] < 8 or widths[i] < 4:
                 continue
-            if self.gallery.person_of(int(tid)) is None:
-                rows.append(i)
-                continue
-            due = self._frame_idx - self._last_embedded.get(int(tid), -(10**9)) >= rc.update_interval
             clean = (
                 heights[i] >= rc.min_box_height
                 and dets.conf[i] >= rc.min_conf
                 and (len(dets) < 2 or iou[i].max() <= rc.max_overlap_iou)
             )
+            if clean:
+                clean_ids.add(int(tid))
+            if self.gallery.person_of(int(tid)) is None:
+                rows.append(i)
+                continue
+            if tick is None:
+                due = self._frame_idx - self._last_embedded.get(int(tid), -(10**9)) >= rc.update_interval
+            else:
+                due = tick
             if due and clean:
                 rows.append(i)
-        return rows
+        return rows, clean_ids
 
     # ---- output ----
     def output(self, result: FrameResult) -> None:
