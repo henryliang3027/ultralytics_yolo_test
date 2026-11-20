@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -25,10 +24,9 @@ import cv2
 
 from person_pipeline import CameraStream, PersonDetector, ReIDExtractor, load_config
 from person_pipeline.gallery import make_galleries
+from person_pipeline.track_update_contract import VIDEO_NAME as NAME
 from person_pipeline.track_updates import TickClock, TrackUpdateWriter, records_of, validate_batch
 from person_pipeline.types import FramePacket
-
-NAME = re.compile(r"^(?P<cam>[^_]+_[^_]+)_(?P<date>\d{8})_(?P<start>\d{6})_(?P<end>\d{6})$")
 
 
 def parse_args():

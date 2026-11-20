@@ -1,32 +1,39 @@
-"""Real-time person detection, tracking and re-identification pipeline."""
+"""Real-time person detection, tracking and re-identification pipeline.
 
-from .camera import CameraStream
-from .capture import FrameSource, GStreamerSource, OpenCVSource, create_frame_source
-from .config import CameraConfig, PipelineConfig, load_config
-from .cupola import CupolaEventSink
-from .sinks import ResultSink
-from .detector import PersonDetector
-from .gallery import IdentityGallery
-from .pipeline import PersonPipeline
-from .reid import ReIDExtractor
-from .tracker import PersonTracker
-from .visualizer import Visualizer
+Names are imported lazily (on first use), so light submodules such as track_update_contract can be imported
+without loading torch, ultralytics or onnxruntime (the shared gallery side does this).
+"""
 
-__all__ = [
-    "CameraConfig",
-    "CameraStream",
-    "CupolaEventSink",
-    "FrameSource",
-    "ResultSink",
-    "GStreamerSource",
-    "IdentityGallery",
-    "OpenCVSource",
-    "PersonDetector",
-    "PersonPipeline",
-    "PersonTracker",
-    "PipelineConfig",
-    "ReIDExtractor",
-    "Visualizer",
-    "create_frame_source",
-    "load_config",
-]
+from importlib import import_module
+
+_EXPORTS = {
+    "CameraConfig": ".config",
+    "CameraStream": ".camera",
+    "CupolaEventSink": ".cupola",
+    "FrameSource": ".capture",
+    "GStreamerSource": ".capture",
+    "IdentityGallery": ".gallery",
+    "OpenCVSource": ".capture",
+    "PersonDetector": ".detector",
+    "PersonPipeline": ".pipeline",
+    "PersonTracker": ".tracker",
+    "PipelineConfig": ".config",
+    "ReIDExtractor": ".reid",
+    "ResultSink": ".sinks",
+    "Visualizer": ".visualizer",
+    "create_frame_source": ".capture",
+    "load_config": ".config",
+}
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str):
+    if name in _EXPORTS:
+        value = getattr(import_module(_EXPORTS[name], __name__), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
