@@ -1,0 +1,24 @@
+# PostgreSQL for the shared gallery. Separate from CVAT's cvat_db; host port 5433, localhost only.
+#   docker compose up -d        (in this folder)
+#   docker compose down         (keeps the data volume; add -v to delete it)
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: shared-gallery-db
+    environment:
+      POSTGRES_USER: gallery
+      POSTGRES_PASSWORD: gallery
+      POSTGRES_DB: shared_gallery
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - shared_gallery_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gallery -d shared_gallery"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+volumes:
+  shared_gallery_pgdata:

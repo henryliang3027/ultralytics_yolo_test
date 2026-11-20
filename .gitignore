@@ -2,3 +2,4 @@ videos/*
 results/*
 *.pyc
 *.onnx
+.venv/
