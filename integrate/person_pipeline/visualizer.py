@@ -26,8 +26,9 @@ def person_color(pid: int) -> tuple:
 
 
 class Visualizer:
-    def __init__(self, draw_detections: bool = True):
+    def __init__(self, draw_detections: bool = True, global_ids: bool = False):
         self.draw_detections = draw_detections
+        self.global_ids = global_ids  # shared gallery: label people G001, G002, ... (same on every camera)
 
     def draw(self, result: FrameResult, status: str = "") -> np.ndarray:
         img = result.packet.image.copy()
@@ -42,7 +43,10 @@ class Visualizer:
                 continue
             color = person_color(pid) if pid is not None else GRAY
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 3)
-            text = f"ID {pid}" if pid is not None else f"T{tid} ?"
+            if pid is None:
+                text = f"T{tid} ?"
+            else:
+                text = f"G{pid:03d}" if self.global_ids else f"ID {pid}"
             _label(img, text, x1, y2, color, 1.2, above=False)
 
         if status:

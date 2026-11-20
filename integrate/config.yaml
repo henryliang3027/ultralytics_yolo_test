@@ -42,7 +42,7 @@ tracker:                   # TrackTrack parameters (override ultralytics/cfg/tra
   gmc_method: none         # camera-motion compensation; fixed camera -> none saves several ms per 4K frame
 
 reid:
-  model: ../../py/MediaMTX/resnet50_market1501_aicity156.onnx
+  model: ../resnet50_market1501_aicity156.onnx
   providers: [CPUExecutionProvider]   # onnxruntime execution providers, tried in order
   input_size: [128, 256]   # width, height
   mean: [0.485, 0.456, 0.406]
@@ -55,8 +55,11 @@ reid:
   update_interval: 5       # re-embed an already identified track every N processed frames
 
 gallery:
+  mode: per_camera                # per_camera: person IDs numbered per camera | shared: one gallery for all cameras,
+                                  # the same person gets the same ID (G001) everywhere (main.py/record.py --gallery shared)
   max_embeddings_per_person: 20   # feature bank size per person; oldest is dropped when full
   match_threshold: 0.65           # cosine similarity needed to give a new track an existing person ID
+  cross_camera_threshold: 0.80    # shared mode: needed when that person was never seen on this camera yet
   match_metric: max               # max: best single embedding in the bank | mean: bank centroid
   track_timeout_s: 5.0            # forget a track -> person binding after the track is unseen this long
   identity_ttl_s: 600.0           # forget a person entirely after unseen this long

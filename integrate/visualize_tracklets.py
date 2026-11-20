@@ -105,8 +105,11 @@ def main() -> int:
 
     # Window: the one record.py used (summary.json next to the file), else the tracklets' own span.
     summary = path.with_name("summary.json")
+    shared = False
     if summary.exists():
-        w = json.loads(summary.read_text())["window_utc"]
+        meta = json.loads(summary.read_text())
+        shared = meta.get("gallery_mode") == "shared"  # camera_person_id is then a global ID: label it G001
+        w = meta["window_utc"]
         start, end = datetime.fromisoformat(w[0]), datetime.fromisoformat(w[1])
     else:
         start, end = min(t.start_ts for t in trs), max(t.end_ts for t in trs)
@@ -161,7 +164,8 @@ def main() -> int:
                     cv2.rectangle(vis, (x1, y1), (x2, y2), col, 3 if t.local_track_id in embedded_here else 2)
                     fx, fy = (int(round(v * s)) for v in f.foot_px)
                     cv2.circle(vis, (fx, fy), 5, col, -1)
-                    tag = f"T{t.local_track_id} P{t.camera_person_id}"
+                    pid = t.camera_person_id
+                    tag = f"T{t.local_track_id} " + (f"G{pid:03d}" if shared and pid is not None else f"P{pid}")
                     if t.local_track_id in embedded_here:
                         tag += " E"
                     if is_first:

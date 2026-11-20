@@ -14,6 +14,7 @@ import cv2
 from .camera import CameraStream
 from .config import CameraConfig, PipelineConfig
 from .detector import PersonDetector
+from .gallery import make_galleries
 from .reid import ReIDExtractor
 
 IDLE_SLEEP_S = 0.002  # no camera has a new frame yet: wait this long before polling again
@@ -46,8 +47,11 @@ class PersonPipeline:
         self.detector = PersonDetector(cfg.detector)
         self.detector.warmup(batch=n)
         self.reid = ReIDExtractor(cfg.reid)
+        galleries = make_galleries(cfg.gallery, [c.name for c in cfg.cameras])
+        print(f"[pipeline] gallery mode: {cfg.gallery.mode}")
         self.cameras = [
-            CameraStream(cam, cfg, self.reid, _save_path(cfg.display.save_path, cam, n)) for cam in cfg.cameras
+            CameraStream(cam, cfg, self.reid, _save_path(cfg.display.save_path, cam, n), gal)
+            for cam, gal in zip(cfg.cameras, galleries)
         ]
         self._running = False
 

@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from person_pipeline import CameraStream, PersonDetector, ReIDExtractor, load_config
+from person_pipeline.gallery import make_galleries
 from person_pipeline.segments import SegmentReader
 from person_pipeline.tracklet_contract import SCHEMA_VERSION, SOURCE, Tracklet
 from person_pipeline.tracklets import TrackIdRegistry, TrackletBuilder, TrackletWriter, local_days
@@ -41,6 +42,8 @@ def parse_args():
     p.add_argument("--no-registry", action="store_true",
                    help="IDs start at 1 and the per-day registry is neither read nor updated (one-off samples; "
                    "IDs may then repeat other runs of the same day)")
+    p.add_argument("--gallery", choices=["per_camera", "shared"], help="override gallery.mode; shared makes "
+                   "camera_person_id one ID space over all cameras")
     p.add_argument("--validate", metavar="JSONL", help="only validate an existing tracklets.jsonl and exit")
     p.add_argument("--mot", action="store_true",
                    help="also write every frame's boxes as MOTChallenge files for IDF1 (<out>/mot/<camera_id>_person.txt "
@@ -94,6 +97,8 @@ def main() -> int:
         raise SystemExit("--start and --end are required")
 
     cfg = load_config(args.config)
+    if args.gallery:
+        cfg.gallery.mode = args.gallery
     rc = cfg.record
     tz = ZoneInfo(rc.timezone)
     start = datetime.strptime(args.start, TIME_FMT).replace(tzinfo=tz).astimezone(timezone.utc)
@@ -112,6 +117,7 @@ def main() -> int:
     cfg.cupola = replace(cfg.cupola, enabled=False)
     model_version = rc.reid_model_version or Path(cfg.reid.model).stem
     print(f"[record] {start.isoformat()} .. {end.isoformat()} UTC, cameras {[c.name for c in cams]}")
+    print(f"[record] gallery mode {cfg.gallery.mode}")
     print(f"[record] contract schema {SCHEMA_VERSION} from {SOURCE}; reid_model_version={model_version}")
 
     detector = PersonDetector(cfg.detector)
@@ -128,7 +134,7 @@ def main() -> int:
         cid = cam.camera_id or cam.name
         folder = Path(rc.recordings_root) / cam.recording_dir
         readers.append(SegmentReader(folder, start, end, tz).start_reading())
-        streams.append(CameraStream(cam, cfg, reid, None))
+        streams.append(CameraStream(cam, cfg, reid, None, gal))
         builders.append(
             TrackletBuilder(
                 cid, writer, model_version, registry.offset(cid, days) if registry else 0, cfg.tracker.track_buffer,
@@ -194,6 +200,7 @@ def main() -> int:
         "schema_version": SCHEMA_VERSION,
         "schema_source": SOURCE,
         "reid_model_version": model_version,
+        "gallery_mode": cfg.gallery.mode,
         "processing_s": round(time.monotonic() - t0, 1),
         "cameras": {},
     }

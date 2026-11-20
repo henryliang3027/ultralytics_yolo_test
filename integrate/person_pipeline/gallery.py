@@ -11,6 +11,13 @@ person ID:
   person seen twice (e.g. upper-body box while a partition hides the legs, then a new full-body box), so that
   person stays a candidate.
 - A track with no embedding yet stays unidentified (None) until one arrives.
+
+Shared mode (`gallery.mode: shared`): every camera talks to one IdentityGallery through a CameraGalleryView, which
+keys tracks as (camera, track_id) because tracker IDs are only unique within a camera. A person can then be bound to
+tracks on several cameras at once. Matching a track to a person never seen on its camera needs the stricter
+`cross_camera_threshold`: lighting and view angle differ between cameras, so similar clothes score higher across
+cameras than within one. "Not visible under another track" is checked within the same camera only: each
+camera updates with its own visible tracks, and two cameras may see the same spot.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ class Identity:
     bank: deque  # of (D,) L2-normalized embeddings, oldest dropped first
     last_seen: float
     track_ids: set = field(default_factory=set)  # every track ID ever bound to this person
+    cameras: set = field(default_factory=set)  # shared mode: cameras this person was seen on (None in per-camera mode)
 
     def similarity(self, emb: np.ndarray, metric: str) -> float:
         feats = np.stack(self.bank)
@@ -74,7 +82,7 @@ class IdentityGallery:
         Returns:
             track ID -> person ID (None when the track has not been identified yet).
         """
-        visible = set(track_ids)
+        visible = list(dict.fromkeys(track_ids))  # ordered: new person IDs follow the tracker order, every run
         for tid in visible:
             self._track_last_seen[tid] = now
 
@@ -100,14 +108,16 @@ class IdentityGallery:
                 occupied = {
                     self._track_to_person[t] for t in bound_visible if not self._same_person_boxes(boxes, tid, t)
                 }
+                cam = _camera_of(tid)
                 for ident in self.identities.values():
                     if ident.person_id not in occupied:
-                        pairs.append((ident.similarity(embeddings[tid], self.cfg.match_metric), tid, ident.person_id))
+                        need = self.cfg.match_threshold if cam in ident.cameras else self.cfg.cross_camera_threshold
+                        sim = ident.similarity(embeddings[tid], self.cfg.match_metric)
+                        if sim >= need:
+                            pairs.append((sim, tid, ident.person_id))
             pairs.sort(reverse=True)
             taken_tracks, taken_people = set(), set()
             for sim, tid, pid in pairs:
-                if sim < self.cfg.match_threshold:
-                    break
                 if tid in taken_tracks or pid in taken_people:
                     continue
                 self._bind(tid, pid, embeddings[tid], now)
@@ -143,6 +153,7 @@ class IdentityGallery:
         ident.bank.append(emb)
         ident.last_seen = now
         ident.track_ids.add(tid)
+        ident.cameras.add(_camera_of(tid))
         self._track_to_person[tid] = pid
 
     def _expire(self, now: float) -> None:
@@ -151,3 +162,42 @@ class IdentityGallery:
             self._track_to_person.pop(tid, None)
         for pid in [p for p, ident in self.identities.items() if now - ident.last_seen > self.cfg.identity_ttl_s]:
             self.identities.pop(pid)
+
+
+def _camera_of(track_key) -> str | None:
+    """Camera of a shared-mode (camera, track_id) key; None for a per-camera int track ID."""
+    return track_key[0] if isinstance(track_key, tuple) else None
+
+
+class CameraGalleryView:
+    """One camera's handle on a gallery shared by every camera; same interface as IdentityGallery."""
+
+    def __init__(self, gallery: IdentityGallery, camera: str):
+        self.gallery = gallery
+        self.camera = camera
+
+    def person_of(self, track_id: int) -> int | None:
+        return self.gallery.person_of((self.camera, track_id))
+
+    def __len__(self) -> int:
+        return len(self.gallery)
+
+    def update(self, track_ids, embeddings, now, boxes=None):
+        c = self.camera
+        mapping = self.gallery.update(
+            [(c, t) for t in track_ids],
+            {(c, t): e for t, e in embeddings.items()},
+            now,
+            {(c, t): b for t, b in boxes.items()} if boxes else None,
+        )
+        return {t: mapping[(c, t)] for t in track_ids}
+
+
+def make_galleries(cfg: GalleryConfig, cameras: list[str]) -> list:
+    """One gallery per camera (per_camera), or one view per camera onto a single shared gallery (shared)."""
+    if cfg.mode == "per_camera":
+        return [IdentityGallery(cfg) for _ in cameras]
+    if cfg.mode == "shared":
+        shared = IdentityGallery(cfg)
+        return [CameraGalleryView(shared, c) for c in cameras]
+    raise ValueError(f"gallery.mode must be 'per_camera' or 'shared', got {cfg.mode!r}")

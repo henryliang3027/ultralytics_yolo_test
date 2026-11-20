@@ -1,7 +1,8 @@
 """Per-camera state: frame source, tracker, gallery, Cupola sink, stats, window and recorder.
 
 Everything that remembers something between frames lives here, one instance per camera, so two cameras never mix
-their tracks or person IDs. The stateless models (YOLO, Re-ID) are owned by the pipeline and shared.
+their tracks. Person IDs are per camera too, unless gallery.mode is shared (then the gallery is one view onto a
+gallery all cameras use). The stateless models (YOLO, Re-ID) are owned by the pipeline and shared.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import numpy as np
 from .capture import FrameSource, create_frame_source
 from .config import CameraConfig, PipelineConfig
 from .cupola import CupolaEventSink
-from .gallery import IdentityGallery
+from .gallery import CameraGalleryView, IdentityGallery
 from .recorder import VideoRecorder
 from .reid import ReIDExtractor
 from .sinks import ResultSink
@@ -38,14 +39,21 @@ def _pairwise_iou(xyxy: np.ndarray) -> np.ndarray:
 
 
 class CameraStream:
-    def __init__(self, cam: CameraConfig, cfg: PipelineConfig, reid: ReIDExtractor, save_path: str | None):
+    def __init__(
+        self,
+        cam: CameraConfig,
+        cfg: PipelineConfig,
+        reid: ReIDExtractor,
+        save_path: str | None,
+        gallery: IdentityGallery | CameraGalleryView | None = None,
+    ):
         self.name = cam.name
         self.cam = cam
         self.cfg = cfg
         self.reid = reid  # shared model
         self.tracker = PersonTracker(cfg.tracker)
-        self.gallery = IdentityGallery(cfg.gallery)
-        self.visualizer = Visualizer(cfg.display.draw_detections)
+        self.gallery = gallery if gallery is not None else IdentityGallery(cfg.gallery)  # shared mode: a view
+        self.visualizer = Visualizer(cfg.display.draw_detections, global_ids=cfg.gallery.mode == "shared")
         self.sinks: list[ResultSink] = []
         if cfg.cupola.enabled and cam.cupola_camera_url:
             self.sinks.append(CupolaEventSink(cfg.cupola, cam.cupola_camera_url, cam.name))

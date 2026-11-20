@@ -4,6 +4,7 @@
     python main.py --source ../videos/test1.mp4         # one camera, offline test on a file
     python main.py --source ../videos/a.mp4 ../videos/b.mp4   # two cameras (also accepts a.mp4,b.mp4)
     python main.py --no-show --save out.mp4             # headless, record out_cam1.mp4, out_cam2.mp4
+    python main.py --source a.mp4 b.mp4 --gallery shared   # one gallery for all cameras: same person, same ID
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ def parse_args():
     p.add_argument("--backend", choices=["opencv", "gstreamer"], help="override source.backend")
     p.add_argument("--no-show", action="store_true", help="do not open a window")
     p.add_argument("--save", help="record the annotated video to this path (one file per camera)")
+    p.add_argument("--gallery", choices=["per_camera", "shared"], help="override gallery.mode")
     p.add_argument("--no-cupola", action="store_true", help="do not push boxes to Cupola")
     return p.parse_args()
 
@@ -52,6 +54,8 @@ def main():
         cfg.source.backend = args.backend
     if args.no_show:
         cfg.display.show = False
+    if args.gallery:
+        cfg.gallery.mode = args.gallery
     if args.no_cupola:
         cfg.cupola.enabled = False
     if args.save:

@@ -63,8 +63,10 @@ class ReIDConfig:
 
 @dataclass
 class GalleryConfig:
+    mode: str = "per_camera"  # per_camera: IDs numbered per camera | shared: one gallery, same person = same ID
     max_embeddings_per_person: int = 20
     match_threshold: float = 0.65
+    cross_camera_threshold: float = 0.80  # shared mode: to a person not seen on this camera yet
     match_metric: str = "max"
     track_timeout_s: float = 5.0
     identity_ttl_s: float = 600.0
