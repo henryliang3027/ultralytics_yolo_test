@@ -17,6 +17,8 @@ Checks:
     python visualize_track_updates.py ../results/track_updates/20261111_153342_153431/tracklets.jsonl
     python visualize_track_updates.py <tracklets.jsonl> --show            # also open a window (q quit, space pause)
     python visualize_track_updates.py <tracklets.jsonl> --videos a.mp4 b.mp4 --no-recheck
+
+Use a file from `record.py --id-type pid` (the default). A `--id-type tid` file (records with "track_id") is refused.
 """
 
 from __future__ import annotations
@@ -98,6 +100,9 @@ def main() -> int:
         if not line.strip():
             continue
         b = json.loads(line)
+        if any("person_id" not in r for r in b.get("records") or [] if isinstance(r, dict)):
+            raise SystemExit(f"{path} has records without person_id (record.py --id-type tid?); "
+                             "run record.py with --id-type pid (the default) and check that file")
         for p in validate_batch(b, tz):
             issues["invalid_batch"].append(f"line {i}: {p}")
         batches.append(b)

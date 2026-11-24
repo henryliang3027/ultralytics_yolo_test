@@ -31,7 +31,8 @@ docker compose stop                             # stop (data is kept in docker v
 
 ## 1. Pre-annotation from tracklets
 
-First run `integrate/record.py` on the videos (see `integrate/README.md`). It writes
+First run `integrate/record.py` on the videos (see `integrate/README.md`) with `--id-type pid`, the default. A
+`--id-type tid` file (records with `track_id`) is refused. It writes
 `results/track_updates/<date>_<start>_<end>/tracklets.jsonl` (one batch of track updates every 5 frames) and
 `summary.json`. Then convert one camera:
 

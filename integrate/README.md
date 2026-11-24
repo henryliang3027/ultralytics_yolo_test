@@ -133,15 +133,66 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 
 # 用本機影片離線測試（會照影片原本的 fps 播放，模擬即時串流）
 # 給幾個來源就跑幾台：依序取代 cameras 清單的 url，空白或逗號分隔都可以
-../pvenv/bin/python main.py --source ../videos/51_203_output20261106_095222.mp4
-../pvenv/bin/python main.py --source ../videos/51_203_output20261106_095222.mp4 ../videos/51_205_output20261106_095222.mp4
-
-# 用影片測試時不要把框推到 Cupola 的真實攝影機畫面上
-../pvenv/bin/python main.py --source a.mp4 b.mp4 --no-cupola
+../pvenv/bin/python main.py --source ../videos/51_203_20261111_153342_153431.mp4 --no-cupola
 
 # 指定其他設定檔、改用 GStreamer 讀取
 ../pvenv/bin/python main.py --config my_config.yaml --backend gstreamer
 ```
+
+### 用兩台攝影機的本機影片測試
+
+`videos/` 裡同一時段的兩支影片（51_203 和 51_205）一起跑：
+
+```bash
+cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
+
+../pvenv/bin/python main.py \
+    --source ../videos/51_203_20261111_153342_153431.mp4 ../videos/51_205_20261111_153342_153431.mp4 \
+    --no-cupola
+```
+
+- 第一支影片取代 `config.yaml` 的 cam1（51_203），第二支取代 cam2（51_205）。每台各開一個視窗，按 `q` 結束。
+- 一定要加 `--no-cupola`。不加的話，框會推到 Cupola 真實攝影機的畫面上，但影片內容不是那台攝影機的即時畫面，框會對不上。
+- 影片會照原本的 fps 播放來模擬即時串流。處理跟不上的畫格會被跳過，數量顯示在統計行的 `dropped`。
+
+#### Gallery 模式：separated（`per_camera`）或 shared（`shared`）
+
+兩種都可以用，差別在兩台攝影機的 person ID 是否共用。預設看 `config.yaml` 的 `gallery.mode`（目前是 `per_camera`），
+執行時用 `--gallery` 可以臨時改掉，不必改設定檔。
+
+| | separated gallery（`--gallery per_camera`） | shared gallery（`--gallery shared`） |
+|---|---|---|
+| gallery | 每台攝影機各一個 | 兩台共用一個 |
+| person ID | 每台各自從 1 開始編號；同一個人在兩台的 ID 不一定相同 | 同一個人在兩台拿到同一個 ID |
+| 畫面上的標籤 | `ID 1`、`ID 2`… | `G001`、`G002`… |
+| 比對門檻 | `match_threshold`（0.65） | 這台已看過的人用 `match_threshold`（0.65）；這台**沒看過**、只在另一台出現過的人，要達到更嚴格的 `cross_camera_threshold`（0.80）才算同一人 |
+| 適合 | 單台追蹤；跨攝影機比對交給 `../shared_gallery/` 服務 | 直接在畫面上看兩台之間的 ID 是否對得上 |
+
+```bash
+# separated gallery：每台各自編號（預設）
+../pvenv/bin/python main.py \
+    --source ../videos/51_203_20261111_153342_153431.mp4 ../videos/51_205_20261111_153342_153431.mp4 \
+    --no-cupola --gallery per_camera
+
+# shared gallery：兩台共用一個 gallery，同一個人在兩台拿到同一個 ID
+../pvenv/bin/python main.py \
+    --source ../videos/51_203_20261111_153342_153431.mp4 ../videos/51_205_20261111_153342_153431.mp4 \
+    --no-cupola --gallery shared
+```
+
+- shared 模式的跨攝影機門檻 0.80，是在這兩支 49 秒影片上調出來的。用 0.65 時，兩台各有一位坐著的不同人被合成同一個 ID；0.80 時只留下真正同一人的那組。換場景或影片更長時要再確認。
+- `record.py` 不管設定都固定用 separated gallery，因為它輸出的 track update 帶的是每台各自的 person ID，跨攝影機比對由 shared gallery 服務負責。
+
+不開視窗、把結果錄成影片：
+
+```bash
+# 不開視窗，把結果錄成影片（產生 out_cam1.mp4、out_cam2.mp4），Ctrl+C 結束
+../pvenv/bin/python main.py \
+    --source ../videos/51_203_20261111_153342_153431.mp4 ../videos/51_205_20261111_153342_153431.mp4 \
+    --no-cupola --no-show --save ../results/main_test/out.mp4
+```
+
+### 統計輸出
 
 每隔 `logging.stats_interval_s` 秒，每台攝影機各印一行統計：
 
@@ -171,33 +222,55 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 
 在本機影片 `51_203_output20261106_095222.mp4` 上，一名穿黑衣、多次被隔板擋住的人（包含被完全擋住約 4 秒），追蹤器從第 22 幀起給了 5 個不同的 track ID；經過 Gallery 後，全部對應到同一個 person ID。他在影片開頭穿過全景左右接縫的那一段仍被當成另一個人（見「已知限制」）。
 
-## 錄影模式：每 1/3 秒匯出一批 track update 給 shared gallery（`record.py`）
+## 錄影模式：匯出 track update / tracklet 資料（`record.py`）
 
-用影片檔離線跑完整 pipeline（偵測 → 追蹤 → Re-ID → 每台自己的 gallery），每 1/3 秒把兩台畫面上所有已有
-person_id 的人寫成一批，存成 `tracklets.jsonl`。介面（欄位、時區、送出時機、驗證）定義在
-`person_pipeline/track_update_contract.py`，是和 shared gallery 端共用的，要改先講好。接收端見 `../shared_gallery/README.md`。
+用影片檔離線跑完整 pipeline（偵測 → 追蹤 → Re-ID → 每台自己的 gallery），每一格都處理，每 1/3 秒把兩台畫面上的
+框寫成一批，存成 `tracklets.jsonl`。依 `--id-type` 有兩種輸出（詳見下方「ID 類型」）：
 
-> 要拿來做 CVAT 標注的預標，見 `../groundtruth/README.md`（`tracklets_to_mot.py` 讀的就是這個檔）。
+- **`--id-type pid`（預設）**：record 帶 `person_id`。這是和 shared gallery 共用的介面（欄位、時區、送出時機、驗證定義在
+  `person_pipeline/track_update_contract.py`，要改先講好；接收端見 `../shared_gallery/README.md`），也是 CVAT 預標
+  （`../groundtruth/tracklets_to_mot.py`）和 `visualize_track_updates.py` 唯一能讀的格式。
+- **`--id-type tid`**：record 帶 `track_id`，每條 tracker track 一筆，用來做 tracklet 資料。
+
+需要完整環境（`pvenv`、GPU、模型）。兩台影片要是同一段時間。
 
 ```bash
 cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 
-# 產生（兩台影片要是同一段時間）
+# 1. 預設（pid）：給 shared gallery、CVAT 預標用
+#    輸出到 ../results/track_updates/20261111_153342_153431/
 ../pvenv/bin/python record.py \
     ../videos/51_203_20261111_153342_153431.mp4 \
     ../videos/51_205_20261111_153342_153431.mp4 \
     --overwrite
 
-# 只檢查現有檔案的格式（不跑模型）
+# 2. tracklet 資料（tid）：放到另一個資料夾，免得蓋掉 pid 的輸出
+../pvenv/bin/python record.py \
+    ../videos/51_203_20261111_153342_153431.mp4 \
+    ../videos/51_205_20261111_153342_153431.mp4 \
+    --id-type tid --out ../results/track_updates_tid/20261111_153342_153431 --overwrite
+
+# 3. 邊跑邊看：兩台上下疊成一個視窗（q 提早結束、空白鍵暫停），pid / tid 都可以加
+../pvenv/bin/python record.py \
+    ../videos/51_203_20261111_153342_153431.mp4 \
+    ../videos/51_205_20261111_153342_153431.mp4 \
+    --show --overwrite
+
+# 4. 只檢查現有檔案的格式（不跑模型；pid、tid 的檔都可以）
 ../pvenv/bin/python record.py \
     --validate ../results/track_updates/20261111_153342_153431/tracklets.jsonl
 ```
 
-需要完整環境（`pvenv`、GPU、模型）。開始時會印出用到的攝影機和起始時間，可以用來確認：
+開始時會印出 ID 類型、攝影機和起始時間，可以用來確認：
 
 ```
-[export] cameras ['51_203', '51_205'], start ['2026-11-11T15:33:42+08:00', '2026-11-11T15:33:42+08:00'], 15 fps, ...
+[record] id type pid (records carry person_id)
+[record] cameras ['51_203', '51_205'], start ['2026-11-11T15:33:42+08:00', '2026-11-11T15:33:42+08:00'], 15 fps, ...
 ```
+
+`--show` 視窗裡，pid 模式標 `P<person_id>`（還沒有 person_id 時標 `T<track_id> ?`），tid 模式標
+`T<track_id> P<person_id>`。送出批次的那一格框會變粗，並標 `E`（有送 embedding）或 `null`。用 `q` 提早結束時，
+`tracklets.jsonl` 只包含已處理的部分，`summary.json` 的 `stopped_early` 會是 `true`。
 
 ### 時間怎麼算
 
@@ -230,12 +303,26 @@ camera_id  日期    起始    結束（只用在輸出資料夾名稱）
 ```
 ultralytics_yolo_test/results/track_updates/20261111_153342_153431/
 ├── tracklets.jsonl    # 一行一批：{"tick_ts": ..., "records": [...]}
-└── summary.json           # 參數、批數、人數等
+└── summary.json       # id_type、參數、批數、人數等
 ```
 
 - 預設位置以程式本身的位置為基準，從哪個資料夾執行都一樣；`--out` 給相對路徑時才以目前資料夾為基準。
 - 第一支影片檔名不符合格式時，資料夾名稱改用它的檔名（不含 `.mp4`）。
 - 已經有 `tracklets.jsonl` 時會停下，要覆蓋請加 `--overwrite`。
+
+### ID 類型（`--id-type`）
+
+| | `pid`（預設） | `tid` |
+|---|---|---|
+| ID 欄位 | `person_id`：這台 gallery 給的人 ID | `track_id`：tracker 給的 track ID |
+| 一筆 record 是 | 一個人；同一人同時有兩個框時只留面積大的 | 一條 track；每條都送，不合併 |
+| 還沒有 person_id 的 track | 不送 | 也送 |
+| 用途 | shared gallery 的介面、CVAT 預標、`visualize_track_updates.py` | 做 tracklet 資料 |
+
+- `summary.json` 的 `id_type` 記錄這個檔是哪一種。
+- `track_id` 每台攝影機、每次執行都從 1 開始，不同次執行的檔案會重號。被擋住超過 `track_buffer`（約 2 秒）再出現會換新的 `track_id`。
+- **`tid` 的檔不是 shared gallery 的介面**，不要送給 `../shared_gallery/`。`../groundtruth/tracklets_to_mot.py` 和
+  `visualize_track_updates.py` 只吃 `pid` 的檔，給 `tid` 的檔會直接停下並提示。
 
 ### 參數
 
@@ -244,15 +331,18 @@ ultralytics_yolo_test/results/track_updates/20261111_153342_153431/
 | `videos...` | — | 每台攝影機一支影片，要是同一段時間 |
 | `--camera-ids` | 從檔名取 | 檔名不符合格式時，依影片順序指定，例如 `--camera-ids 51_203 51_205` |
 | `--start` | 從檔名取 | 本地起始時間，例如 `"2026-11-11 15:33:42"`；**所有影片都用這個時間** |
+| `--id-type` | `pid` | `pid`：record 帶 `person_id`；`tid`：record 帶 `track_id`，見上方「ID 類型」 |
 | `--interval` | 5 | 每幾格送一批（15 fps 時 5 格 = 1/3 秒） |
 | `--out` | `results/track_updates/<日期>_<起始>_<結束>` | 輸出資料夾，裡面固定叫 `tracklets.jsonl` |
 | `--config` | `integrate/config.yaml` | 模型路徑和門檻 |
 | `--overwrite` | 關 | 覆蓋已有的檔案 |
 | `--validate JSONL` | — | 只檢查檔案格式就結束 |
+| `--show` | 關 | 邊跑邊顯示兩台畫面（q 結束、空白鍵暫停） |
+| `--show-scale` | 0.25 | 視窗中每台畫面相對 3840x1920 的大小 |
 
 - 不管 `config.yaml` 的 `gallery.mode` 設什麼，這裡都用每台各自的 gallery（`per_camera`）。
 - 每一格都處理，不會丟格。
-- 寫入前每一批都會先驗證，不符合介面就停下。
+- 寫入前每一批都會先驗證，不符合格式就停下（tid 的 `track_id` 用和 `person_id` 一樣的規則檢查）。
 
 ## 讀取後端：OpenCV 與 GStreamer
 
