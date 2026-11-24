@@ -190,6 +190,91 @@ python record.py --validate ../results/tracklets/20261111_1532-1552/tracklets.js
   `record.out_dir/track_id_registry.json`（每台、每個本地日期），所以重開程式也不會在同一天重複。
 - 輸出資料夾已有 `tracklets.jsonl` 時會停下，要覆蓋請加 `--overwrite`；同時另存 `summary.json`。
 
+## Track update 匯出：每 1/3 秒送一批給 shared gallery（`export_track_updates.py`）
+
+用影片檔離線跑完整 pipeline（偵測 → 追蹤 → Re-ID → 每台自己的 gallery），每 1/3 秒把兩台畫面上所有已有
+person_id 的人寫成一批，存成 `tracklets.jsonl`。介面（欄位、時區、送出時機、驗證）定義在
+`person_pipeline/track_update_contract.py`，是和 shared gallery 端共用的，要改先講好。接收端見 `../shared_gallery/README.md`。
+
+> 檔名和 `record.py` 的輸出一樣叫 `tracklets.jsonl`，但**格式不同**：這裡一行是一批 track update
+> （`{"tick_ts", "records"}`，+08:00），`record.py` 的一行是一條結束的 tracklet（v0.2 合約，UTC）。
+> 用資料夾區分：`results/track_updates/...` 和 `results/tracklets/...`。
+
+```bash
+cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
+
+# 產生（兩台影片要是同一段時間）
+../pvenv/bin/python export_track_updates.py \
+    ../videos/51_203_20261111_153342_153431.mp4 \
+    ../videos/51_205_20261111_153342_153431.mp4 \
+    --overwrite
+
+# 只檢查現有檔案的格式（不跑模型）
+../pvenv/bin/python export_track_updates.py \
+    --validate ../results/track_updates/20261111_153342_153431/tracklets.jsonl
+```
+
+需要完整環境（`pvenv`、GPU、模型）。開始時會印出用到的攝影機和起始時間，可以用來確認：
+
+```
+[export] cameras ['51_203', '51_205'], start ['2026-11-11T15:33:42+08:00', '2026-11-11T15:33:42+08:00'], 15 fps, ...
+```
+
+### 時間怎麼算
+
+不加參數時，**每支影片的起始時間都從自己的檔名取**，檔名格式要是 `<camera_id>_<YYYYMMDD>_<HHMMSS 起>_<HHMMSS 迄>.mp4`：
+
+```
+51_203_20261111_153342_153431.mp4
+└─┬──┘ └──┬───┘ └─┬──┘ └─┬──┘
+camera_id  日期    起始    結束（只用在輸出資料夾名稱）
+```
+
+- 時區是 `config.yaml` 的 `record.timezone`（Asia/Taipei），輸出時間帶 `+08:00`，跟檔名一樣是台灣時間。
+- 每格時間 = 檔名起始時間 + 第幾格 / fps：
+
+  | 第幾格 | 時間 |
+  |---|---|
+  | 0 | 15:33:42.000000+08:00 |
+  | 5 | 15:33:42.333333+08:00 |
+  | 10 | 15:33:42.666667+08:00 |
+  | 15 | 15:33:43.000000+08:00 |
+
+- 每秒的 .000 / .333 / .667 送一批（用時間判斷，不是數格數），所以兩台起始時間不同也會落在同一批。
+- 檔名只到秒；實際開始時間如果有零頭（例如 15:33:42.4），時間會整體差那一點。
+- 檔名不符合格式時會停下，提示加 `--start` 或 `--camera-ids`；不會改用現在時間或檔案修改時間。
+
+### 輸出位置
+
+預設是 **repo 根目錄的 `results/track_updates/<日期>_<起始>_<結束>/`**，名稱取自**第一支**影片的檔名（不含 camera_id）：
+
+```
+ultralytics_yolo_test/results/track_updates/20261111_153342_153431/
+├── tracklets.jsonl    # 一行一批：{"tick_ts": ..., "records": [...]}
+└── summary.json           # 參數、批數、人數等
+```
+
+- 預設位置以程式本身的位置為基準，從哪個資料夾執行都一樣；`--out` 給相對路徑時才以目前資料夾為基準。
+- 第一支影片檔名不符合格式時，資料夾名稱改用它的檔名（不含 `.mp4`）。
+- 已經有 `tracklets.jsonl` 時會停下，要覆蓋請加 `--overwrite`。
+
+### 參數
+
+| 參數 | 預設 | 作用 |
+|---|---|---|
+| `videos...` | — | 每台攝影機一支影片，要是同一段時間 |
+| `--camera-ids` | 從檔名取 | 檔名不符合格式時，依影片順序指定，例如 `--camera-ids 51_203 51_205` |
+| `--start` | 從檔名取 | 本地起始時間，例如 `"2026-11-11 15:33:42"`；**所有影片都用這個時間** |
+| `--interval` | 5 | 每幾格送一批（15 fps 時 5 格 = 1/3 秒） |
+| `--out` | `results/track_updates/<日期>_<起始>_<結束>` | 輸出資料夾，裡面固定叫 `tracklets.jsonl` |
+| `--config` | `integrate/config.yaml` | 模型路徑和門檻 |
+| `--overwrite` | 關 | 覆蓋已有的檔案 |
+| `--validate JSONL` | — | 只檢查檔案格式就結束 |
+
+- 不管 `config.yaml` 的 `gallery.mode` 設什麼，這裡都用每台各自的 gallery（`per_camera`）。
+- 每一格都處理，不會丟格。
+- 寫入前每一批都會先驗證，不符合介面就停下。
+
 ## 讀取後端：OpenCV 與 GStreamer
 
 | | `opencv`（預設） | `gstreamer` |

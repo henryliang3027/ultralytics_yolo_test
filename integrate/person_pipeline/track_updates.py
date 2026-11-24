@@ -1,4 +1,4 @@
-"""Track updates, pipeline side: turn one frame's results into interface records and write track_updates.jsonl.
+"""Track updates, pipeline side: turn one frame's results into interface records and write tracklets.jsonl.
 
 The interface itself (format, tick clock, validation) is in track_update_contract.py, shared with shared_gallery/.
 """
