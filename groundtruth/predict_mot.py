@@ -3,7 +3,7 @@
     python predict_mot.py ../videos/51_203_20261111_153342_153431.mp4
 
 Writes <out>/pred/<video name>_person.txt (the person ID shown on each frame) and _track.txt (local_track_id, the
-raw tracker ID). Default out: ./<video name>/. Same models and config as record mode (../integrate/config.yaml); every
+raw tracker ID). Default out: ./<video name>/. Same models and config as record.py (../integrate/config.yaml); every
 frame is processed in order, none is dropped, and the gallery timeouts follow video time (frame / fps), so frame N of
 these files is frame N of the video, as in the CVAT task.
 """
@@ -23,7 +23,21 @@ sys.path.insert(0, str(INTEGRATE))
 
 from person_pipeline import CameraStream, PersonDetector, ReIDExtractor, load_config  # noqa: E402
 from person_pipeline.types import FramePacket  # noqa: E402
-from record import write_mot  # noqa: E402
+
+
+def write_mot(files, frame: int, result, id_offset: int) -> None:
+    """One MOTChallenge line per tracked box (frame from 1). A box whose track has no person ID yet gets
+    100000 + local_track_id in the person file, so it can never count as the right person."""
+    person_f, track_f = files
+    for i, tid in enumerate(result.track_ids):
+        if tid < 0:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in result.detections.xyxy[i])
+        box = f"{x1:.2f},{y1:.2f},{x2 - x1:.2f},{y2 - y1:.2f},{float(result.detections.conf[i]):.3f},-1,-1,-1"
+        local = id_offset + int(tid)
+        pid = result.person_ids[i]
+        person_f.write(f"{frame},{pid if pid is not None else 100000 + local},{box}\n")
+        track_f.write(f"{frame},{local},{box}\n")
 
 
 def main() -> int:

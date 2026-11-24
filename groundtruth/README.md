@@ -31,16 +31,24 @@ docker compose stop                             # stop (data is kept in docker v
 
 ## 1. Pre-annotation from tracklets
 
+First run `integrate/record.py` on the videos (see `integrate/README.md`). It writes
+`results/track_updates/<date>_<start>_<end>/tracklets.jsonl` (one batch of track updates every 5 frames) and
+`summary.json`. Then convert one camera:
+
 ```bash
 cd groundtruth
-../pvenv/bin/python tracklets_to_mot.py ../results/tracklets/20261111_153342_153431/tracklets.jsonl \
-    --camera 51_203 --video ../videos/51_203_20261111_153342_153431.mp4
+../pvenv/bin/python tracklets_to_mot.py ../results/track_updates/20261111_153342_153431/tracklets.jsonl --camera 51_203
 ```
 
+The video and its start time are taken from `summary.json`; pass `--video <mp4>` if it is missing.
 This writes `51_203_20261111_153342_153431/` with two files:
 
 - `*_cvat_mot.zip`: the pre-annotation to import into CVAT.
 - `pred/*.txt`: the same boxes as a TrackEval tracker result.
+
+The ID is the `person_id` of each record. Batches are only every 5 frames, so the frames between two batches are
+filled by linear interpolation when the person is in both (`--no-fill` keeps only the batch frames). Tracks that
+never got a `person_id` are not in `tracklets.jsonl`, so add those people by hand in CVAT.
 
 ## 2. Fix in CVAT
 
@@ -70,15 +78,13 @@ This writes `51_203_20261111_153342_153431/` with two files:
 ../pvenv/bin/python predict_mot.py ../videos/51_203_20261111_153342_153431.mp4
 ```
 
-This runs the pipeline (same config as record mode) over every frame of the mp4 and writes two files to `<video name>/pred/`:
+This runs the pipeline (same config as `record.py`) over every frame of the mp4 and writes two files to `<video name>/pred/`:
 
 - `*_person.txt`: the person ID shown on each frame. Use it for the system's IDF1.
 - `*_track.txt`: the raw tracker ID (`local_track_id`). Use it for the tracker's IDF1.
 
-For new recordings, `record.py --mot` writes the same files to `<out>/mot/`.
-
-Do not use `pred/<video name>.txt` from `tracklets_to_mot.py` for scoring. Its IDs are one majority vote per tracklet,
-so it hides ID errors and the score comes out too high.
+Do not use `pred/<video name>.txt` from `tracklets_to_mot.py` for scoring. Its boxes between batches are interpolated,
+and tracks without a `person_id` are missing, so it is not what the pipeline showed on each frame.
 
 ## 4. IDF1
 

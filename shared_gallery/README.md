@@ -181,7 +181,7 @@ docker compose down -v && docker compose up -d     # -v 會刪掉整個資料庫
 | `embedding` | 256 維、L2 正規化（模型 resnet50_market1501_aicity156）。畫面不乾淨時是 `null`：框高 < 48 px，或跟別人重疊 IoU > 0.3 |
 
 - 每批包含兩台所有已有 person_id 的人，同一台同一個人只出現一次。
-- 檢查檔案格式：在 Henry 的完整環境裡執行 `python integrate/export_track_updates.py --validate <檔案>`。
+- 檢查檔案格式：在 Henry 的完整環境裡執行 `python integrate/record.py --validate <檔案>`。
 
 ## API
 

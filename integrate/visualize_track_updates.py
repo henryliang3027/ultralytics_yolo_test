@@ -1,6 +1,6 @@
 """Check a tracklets.jsonl against the videos it came from, and draw it onto them.
 
-The videos are read again with the same frame-time rule export_track_updates.py used (start time + frame index / fps),
+The videos are read again with the same frame-time rule record.py used (start time + frame index / fps),
 so every record is matched to its source frame by exact time (microseconds), not by guessing a frame index.
 The cameras are stacked top to bottom in one output video (and window with --show).
 
@@ -75,7 +75,7 @@ def sources(path: Path, videos: list[str] | None, camera_ids: list[str] | None, 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("updates", help="tracklets.jsonl from export_track_updates.py")
+    ap.add_argument("updates", help="tracklets.jsonl from record.py")
     ap.add_argument("--videos", nargs="+", help="one video per camera (default: summary.json next to the file)")
     ap.add_argument("--camera-ids", nargs="+", help="camera_id per video (default: summary.json / the video names)")
     ap.add_argument("--config", default=str(Path(__file__).with_name("config.yaml")))
@@ -153,7 +153,7 @@ def main() -> int:
                 break
             panels = []
             for (cid, _, start), (_, img) in zip(srcs, frames):
-                ts = start + timedelta(seconds=k / fps)  # same rule as export_track_updates.py
+                ts = start + timedelta(seconds=k / fps)  # same rule as record.py
                 recs = rec_at.get((cid, key(ts)))
                 tick = recs is not None
                 if tick:

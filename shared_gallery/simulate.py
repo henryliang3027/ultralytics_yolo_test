@@ -9,7 +9,7 @@ Sources of the batches:
   --source jsonl     replay results/track_updates/.../track_updates.jsonl (already exported); boxes on screen are
                      the last batch's (they update 3 times a second)
   --source pipeline  run the real pipeline (YOLO -> TrackTrack -> Re-ID -> separate per-camera galleries) on the
-                     videos and build each batch on the fly, exactly as export_track_updates.py does: the
+                     videos and build each batch on the fly, exactly as record.py does: the
                      integration test. --dump writes what was sent, to compare with the exported file.
 
     python service.py &                                   # first: docker compose up -d
@@ -119,7 +119,7 @@ class JsonlSource:
 
 
 class PipelineSource:
-    """The real per-camera pipeline; builds each batch like export_track_updates.py."""
+    """The real per-camera pipeline; builds each batch like record.py."""
 
     def __init__(self, cfg, cam_ids, fps, interval, tz):
         from fractions import Fraction

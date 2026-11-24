@@ -171,46 +171,25 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 
 在本機影片 `51_203_output20261106_095222.mp4` 上，一名穿黑衣、多次被隔板擋住的人（包含被完全擋住約 4 秒），追蹤器從第 22 幀起給了 5 個不同的 track ID；經過 Gallery 後，全部對應到同一個 person ID。他在影片開頭穿過全景左右接縫的那一段仍被當成另一個人（見「已知限制」）。
 
-## 錄影模式：匯出 tracklets 給跨攝影機端（`record.py`）
-
-從 Cupola 的錄影檔（`record.recordings_root` 底下每台一個資料夾的 `.ts` 片段）跑完整 pipeline，把**結束的 track**
-依共用合約 `tracklet_schema` v0.2（github.com/entienlin/reid-heatmap `packages/tracklet_schema`）寫成
-`tracklets.jsonl`，一行一個 `Tracklet.model_dump_json()`。
-
-```bash
-pip install -e <reid-heatmap>/packages/tracklet_schema   # 用合約套件驗證；沒裝時用 person_pipeline/tracklet_contract.py 的副本
-python record.py --start "2026-11-11 15:32:00" --end "2026-11-11 15:52:00" --out ../results/tracklets/20261111_1532-1552
-python record.py --validate ../results/tracklets/20261111_1532-1552/tracklets.jsonl
-```
-
-- 時間用 Asia/Taipei 本地時間指定；每個畫格的 UTC 時間 = 片段檔名時間（轉 UTC）+ 片段內 frame_index / fps（合約規則）。
-- 每一格都處理，不像即時模式會丟格。錄影是 15 fps，`track_buffer: 30` = 約 2 秒沒看到才結束 track。
-- 一個 tracklet = 一條原始 tracker track，不做合併或接回；embedding 最多 20 個，平均分布在整條 track 上。
-- `camera_id` 取 `cameras[].camera_id`（51_203 / 51_205）。`local_track_id` = 本次偏移量 + tracker ID；偏移量記在
-  `record.out_dir/track_id_registry.json`（每台、每個本地日期），所以重開程式也不會在同一天重複。
-- 輸出資料夾已有 `tracklets.jsonl` 時會停下，要覆蓋請加 `--overwrite`；同時另存 `summary.json`。
-
-## Track update 匯出：每 1/3 秒送一批給 shared gallery（`export_track_updates.py`）
+## 錄影模式：每 1/3 秒匯出一批 track update 給 shared gallery（`record.py`）
 
 用影片檔離線跑完整 pipeline（偵測 → 追蹤 → Re-ID → 每台自己的 gallery），每 1/3 秒把兩台畫面上所有已有
 person_id 的人寫成一批，存成 `tracklets.jsonl`。介面（欄位、時區、送出時機、驗證）定義在
 `person_pipeline/track_update_contract.py`，是和 shared gallery 端共用的，要改先講好。接收端見 `../shared_gallery/README.md`。
 
-> 檔名和 `record.py` 的輸出一樣叫 `tracklets.jsonl`，但**格式不同**：這裡一行是一批 track update
-> （`{"tick_ts", "records"}`，+08:00），`record.py` 的一行是一條結束的 tracklet（v0.2 合約，UTC）。
-> 用資料夾區分：`results/track_updates/...` 和 `results/tracklets/...`。
+> 要拿來做 CVAT 標注的預標，見 `../groundtruth/README.md`（`tracklets_to_mot.py` 讀的就是這個檔）。
 
 ```bash
 cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 
 # 產生（兩台影片要是同一段時間）
-../pvenv/bin/python export_track_updates.py \
+../pvenv/bin/python record.py \
     ../videos/51_203_20261111_153342_153431.mp4 \
     ../videos/51_205_20261111_153342_153431.mp4 \
     --overwrite
 
 # 只檢查現有檔案的格式（不跑模型）
-../pvenv/bin/python export_track_updates.py \
+../pvenv/bin/python record.py \
     --validate ../results/track_updates/20261111_153342_153431/tracklets.jsonl
 ```
 
