@@ -3,7 +3,7 @@ and a TrackEval prediction.
 
     python tracklets_to_mot.py ../results/track_updates/20261111_153342_153431/tracklets.jsonl --camera 51_203
 
-Use a file from `record.py --id-type pid` (the default). A `--id-type tid` file (records with "track_id") is refused.
+Use a file from `record.py --id-type pid` (the default). A `--id-type tid` or `both` file (records with "track_id") is refused.
 
 The video and its start time come from summary.json next to the jsonl (written by record.py); pass --video for a
 file without one (the start time is then read from the video name, <camera_id>_<YYYYMMDD>_<HHMMSS>_<HHMMSS>.mp4).
@@ -93,8 +93,8 @@ def main() -> int:
         batch = json.loads(line)
         if set(batch) != {"tick_ts", "records"}:
             raise SystemExit(f"{jsonl} is not record.py's track-update file (keys {sorted(batch)})")
-        if any("person_id" not in r for r in batch["records"]):
-            raise SystemExit(f"{jsonl} has records without person_id (record.py --id-type tid?); "
+        if any("person_id" not in r or "track_id" in r for r in batch["records"]):
+            raise SystemExit(f"{jsonl} has track_id records (record.py --id-type tid or both?), not person_id ones; "
                              "run record.py with --id-type pid (the default) and convert that file")
         ticks.append({r["person_id"]: (frame_of(r["timestamp"]), r["bbox"])
                       for r in batch["records"] if r["camera_id"] == args.camera})

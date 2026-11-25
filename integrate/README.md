@@ -225,12 +225,13 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 ## 錄影模式：匯出 track update / tracklet 資料（`record.py`）
 
 用影片檔離線跑完整 pipeline（偵測 → 追蹤 → Re-ID → 每台自己的 gallery），每一格都處理，每 1/3 秒把兩台畫面上的
-框寫成一批，存成 `tracklets.jsonl`。依 `--id-type` 有兩種輸出（詳見下方「ID 類型」）：
+框寫成一批，存成 `tracklets.jsonl`。依 `--id-type` 有三種輸出（詳見下方「ID 類型」）：
 
 - **`--id-type pid`（預設）**：record 帶 `person_id`。這是和 shared gallery 共用的介面（欄位、時區、送出時機、驗證定義在
   `person_pipeline/track_update_contract.py`，要改先講好；接收端見 `../shared_gallery/README.md`），也是 CVAT 預標
   （`../groundtruth/tracklets_to_mot.py`）和 `visualize_track_updates.py` 唯一能讀的格式。
 - **`--id-type tid`**：record 帶 `track_id`，每條 tracker track 一筆，用來做 tracklet 資料。
+- **`--id-type both`**：跟 tid 一樣每條 track 一筆，但 record 同時帶 `track_id` 和 `person_id`（還沒有 person_id 時是 `null`）。
 
 需要完整環境（`pvenv`、GPU、模型）。兩台影片要是同一段時間。
 
@@ -250,16 +251,42 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
     ../videos/51_205_20261111_153342_153431.mp4 \
     --id-type tid --out ../results/track_updates_tid/20261111_153342_153431 --overwrite
 
-# 3. 邊跑邊看：兩台上下疊成一個視窗（q 提早結束、空白鍵暫停），pid / tid 都可以加
+# 3. 邊跑邊看：兩台上下疊成一個視窗（q 提早結束、空白鍵暫停），pid / tid / both 都可以加
 ../pvenv/bin/python record.py \
     ../videos/51_203_20261111_153342_153431.mp4 \
     ../videos/51_205_20261111_153342_153431.mp4 \
     --show --overwrite
 
-# 4. 只檢查現有檔案的格式（不跑模型；pid、tid 的檔都可以）
+# 4. 只檢查現有檔案的格式（不跑模型；pid、tid、both 的檔都可以）
 ../pvenv/bin/python record.py \
     --validate ../results/track_updates/20261111_153342_153431/tracklets.jsonl
 ```
+
+#### 範例：外接硬碟上的影片跑 tid
+
+影片不在 `../videos/` 時，直接給完整路徑。檔名格式不變，時間和 camera_id 還是從檔名取。一定要加 `--out`：不加的話會寫到
+pid 的預設位置 `results/track_updates/<tag>/`，再加上 `--overwrite` 就會蓋掉 pid 的輸出。
+
+```bash
+cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
+
+# 匯出：存到 results/track_updates_tid/20261111_153342_153431/（tracklets.jsonl、summary.json）
+../pvenv/bin/python record.py \
+    /run/media/ubuntu/TRANS32_2/Under_1_Minute/51_203_20261111_153342_153431.mp4 \
+    /run/media/ubuntu/TRANS32_2/Under_1_Minute/51_205_20261111_153342_153431.mp4 \
+    --id-type tid \
+    --out ../results/track_updates_tid/20261111_153342_153431 \
+    --overwrite
+
+# 檢查格式
+../pvenv/bin/python record.py \
+    --validate ../results/track_updates_tid/20261111_153342_153431/tracklets.jsonl
+```
+
+- 開始時要印出 `[record] id type tid (...)`，`summary.json` 的 `"id_type"` 要是 `"tid"`。
+- tid 的檔**不能**給 shared gallery 的 `simulate.py` / `service.py`，那邊只吃 pid（record 要有 `person_id`）。
+- 要同時記錄 `track_id` 和 `person_id`，把 `--id-type tid` 換成 `--id-type both`，`--out` 換到另一個資料夾，例如
+  `../results/track_updates_both/20261111_153342_153431`。開始時會印出 `[record] id type both (records carry track_id and person_id)`。
 
 開始時會印出 ID 類型、攝影機和起始時間，可以用來確認：
 
@@ -268,7 +295,7 @@ cd /home/ubuntu/Documents/Github/ultralytics_yolo_test/integrate
 [record] cameras ['51_203', '51_205'], start ['2026-11-11T15:33:42+08:00', '2026-11-11T15:33:42+08:00'], 15 fps, ...
 ```
 
-`--show` 視窗裡，pid 模式標 `P<person_id>`（還沒有 person_id 時標 `T<track_id> ?`），tid 模式標
+`--show` 視窗裡，pid 模式標 `P<person_id>`（還沒有 person_id 時標 `T<track_id> ?`），tid、both 模式標
 `T<track_id> P<person_id>`。送出批次的那一格框會變粗，並標 `E`（有送 embedding）或 `null`。用 `q` 提早結束時，
 `tracklets.jsonl` 只包含已處理的部分，`summary.json` 的 `stopped_early` 會是 `true`。
 
@@ -312,17 +339,28 @@ ultralytics_yolo_test/results/track_updates/20261111_153342_153431/
 
 ### ID 類型（`--id-type`）
 
-| | `pid`（預設） | `tid` |
-|---|---|---|
-| ID 欄位 | `person_id`：這台 gallery 給的人 ID | `track_id`：tracker 給的 track ID |
-| 一筆 record 是 | 一個人；同一人同時有兩個框時只留面積大的 | 一條 track；每條都送，不合併 |
-| 還沒有 person_id 的 track | 不送 | 也送 |
-| 用途 | shared gallery 的介面、CVAT 預標、`visualize_track_updates.py` | 做 tracklet 資料 |
+| | `pid`（預設） | `tid` | `both` |
+|---|---|---|---|
+| ID 欄位 | `person_id`：這台 gallery 給的人 ID | `track_id`：tracker 給的 track ID | `track_id` 和 `person_id` 都有 |
+| 一筆 record 是 | 一個人；同一人同時有兩個框時只留面積大的 | 一條 track；每條都送，不合併 | 同 tid |
+| 還沒有 person_id 的 track | 不送 | 也送 | 也送，`person_id` 是 `null` |
+| 用途 | shared gallery 的介面、CVAT 預標、`visualize_track_updates.py` | 做 tracklet 資料 | 做 tracklet 資料，並知道每條 track 屬於哪個人 |
+
+both 的一筆 record：
+
+```json
+{"timestamp": "2026-11-11T15:33:42.333333+08:00", "camera_id": "51_203", "track_id": 3, "person_id": 2,
+ "bbox": [x1, y1, x2, y2], "embedding": [256 個數] }
+```
+
+- 新 track 在第一格就會做 Re-ID、拿到 person_id，所以 `null` 很少見：只有框小於 8×4 px、沒做 Re-ID 的 track 才會是 `null`。
+- gallery 可能把兩個重疊的框（例如上半身框和全身框）綁到同一個人，這時同一批裡會有兩筆相同的 `person_id`。
+- both 的 `summary.json` 每台多一個 `distinct_person_ids`（不含 `null`）。
 
 - `summary.json` 的 `id_type` 記錄這個檔是哪一種。
 - `track_id` 每台攝影機、每次執行都從 1 開始，不同次執行的檔案會重號。被擋住超過 `track_buffer`（約 2 秒）再出現會換新的 `track_id`。
-- **`tid` 的檔不是 shared gallery 的介面**，不要送給 `../shared_gallery/`。`../groundtruth/tracklets_to_mot.py` 和
-  `visualize_track_updates.py` 只吃 `pid` 的檔，給 `tid` 的檔會直接停下並提示。
+- **`tid`、`both` 的檔不是 shared gallery 的介面**，不要送給 `../shared_gallery/`。`../groundtruth/tracklets_to_mot.py` 和
+  `visualize_track_updates.py` 只吃 `pid` 的檔，給 `tid`、`both` 的檔會直接停下並提示。
 
 ### 參數
 
@@ -331,7 +369,7 @@ ultralytics_yolo_test/results/track_updates/20261111_153342_153431/
 | `videos...` | — | 每台攝影機一支影片，要是同一段時間 |
 | `--camera-ids` | 從檔名取 | 檔名不符合格式時，依影片順序指定，例如 `--camera-ids 51_203 51_205` |
 | `--start` | 從檔名取 | 本地起始時間，例如 `"2026-11-11 15:33:42"`；**所有影片都用這個時間** |
-| `--id-type` | `pid` | `pid`：record 帶 `person_id`；`tid`：record 帶 `track_id`，見上方「ID 類型」 |
+| `--id-type` | `pid` | `pid`：record 帶 `person_id`；`tid`：record 帶 `track_id`；`both`：兩個都帶，見上方「ID 類型」 |
 | `--interval` | 5 | 每幾格送一批（15 fps 時 5 格 = 1/3 秒） |
 | `--out` | `results/track_updates/<日期>_<起始>_<結束>` | 輸出資料夾，裡面固定叫 `tracklets.jsonl` |
 | `--config` | `integrate/config.yaml` | 模型路徑和門檻 |

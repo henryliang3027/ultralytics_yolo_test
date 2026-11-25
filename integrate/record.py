@@ -13,7 +13,9 @@ local record.timezone) unless --start is given; camera_id is the first two parts
 --id-type pid (default): records carry "person_id" (the camera's gallery ID); this is the shared-gallery interface,
 and the only kind groundtruth/tracklets_to_mot.py and visualize_track_updates.py read.
 --id-type tid: records carry "track_id" (the tracker's ID) instead, one record per track, also tracks without a
-person_id yet; for building tracklet data. summary.json says which one a file holds ("id_type").
+person_id yet; for building tracklet data.
+--id-type both: as tid, and every record also carries "person_id" (null while the track has none yet).
+summary.json says which one a file holds ("id_type"). tid and both files are not for the shared gallery.
 """
 
 from __future__ import annotations
@@ -43,9 +45,9 @@ def parse_args():
     p.add_argument("--config", default=str(Path(__file__).with_name("config.yaml")))
     p.add_argument("--camera-ids", nargs="+", help="camera_id per video (default: from the file names)")
     p.add_argument("--start", help="local start time of every video, YYYY-MM-DD HH:MM:SS (default: from the names)")
-    p.add_argument("--id-type", choices=["pid", "tid"], default="pid",
+    p.add_argument("--id-type", choices=["pid", "tid", "both"], default="pid",
                    help="pid: person_id per record (shared-gallery interface, default) | tid: track_id per record "
-                   "(tracklet data)")
+                   "(tracklet data) | both: track_id and person_id per record (tracklet data)")
     p.add_argument("--interval", type=int, default=5, help="frames between batches (5 at 15 fps = every 1/3 s)")
     p.add_argument("--out", help="output folder (default: ../results/track_updates/<date>_<start>_<end>)")
     p.add_argument("--overwrite", action="store_true", help="replace an existing tracklets.jsonl")
@@ -66,7 +68,7 @@ def _color(pid: int) -> tuple:
 
 def draw_panel(img, r, cid: str, ts: datetime, k: int, recs: list | None, tz, scale: float, id_type: str = "pid"):
     """One camera's frame: every tracked box, labelled P<person_id> (T<track id> ? before it has one); with
-    id_type tid, T<track id> (P<person_id> or ?). On a tick frame (recs = the records just sent) the sent boxes are
+    id_type tid or both, T<track id> (P<person_id> or ?). On a tick frame (recs = the records just sent) the sent boxes are
     thick and say E (embedding sent) or null."""
     vis = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     key = ID_KEY[id_type]
@@ -80,7 +82,7 @@ def draw_panel(img, r, cid: str, ts: datetime, k: int, recs: list | None, tz, sc
         rec = sent.get(pid if id_type == "pid" else int(tid))
         thick = rec is not None and rec["bbox"] == [round(float(v), 2) for v in r.detections.xyxy[i]]
         cv2.rectangle(vis, (x1, y1), (x2, y2), col, 2 if thick else 1)
-        if id_type == "tid":
+        if id_type != "pid":
             text = f"T{int(tid)} " + ("?" if pid is None else f"P{pid}")
         else:
             text = f"T{int(tid)} ?" if pid is None else f"P{pid}"
@@ -162,7 +164,8 @@ def main() -> int:
     out_path = out_dir / "tracklets.jsonl"
     if out_path.exists() and not args.overwrite:
         raise SystemExit(f"{out_path} exists; pick another --out or pass --overwrite")
-    print(f"[record] id type {args.id_type} (records carry {ID_KEY[args.id_type]})")
+    carry = "track_id and person_id" if args.id_type == "both" else ID_KEY[args.id_type]
+    print(f"[record] id type {args.id_type} (records carry {carry})")
     print(f"[record] cameras {cam_ids}, start {[s.astimezone(tz).isoformat() for s in starts]}, {fps:g} fps, "
           f"batch every {args.interval} frames ({float(period):.3f}s)")
 
@@ -175,6 +178,7 @@ def main() -> int:
 
     stats = {c: Counter() for c in cam_ids}
     persons = {c: set() for c in cam_ids}
+    person_ids = {c: set() for c in cam_ids}  # both: distinct non-null person_id
     t0 = time.monotonic()
     k = 0
     stopped_early = paused = False
@@ -203,6 +207,8 @@ def main() -> int:
                 st["records"] += len(recs)
                 for rec in recs:
                     persons[cid].add(rec[ID_KEY[args.id_type]])
+                    if args.id_type == "both" and rec["person_id"] is not None:
+                        person_ids[cid].add(rec["person_id"])
                     if rec["embedding"] is None:
                         h = rec["bbox"][3] - rec["bbox"][1]
                         st["null_small_box" if h < cfg.reid.min_box_height else "null_overlap_or_conf"] += 1
@@ -259,10 +265,12 @@ def main() -> int:
             "embedding_null_ratio": round(nulls / max(st["records"], 1), 3),
             "null_small_box": st["null_small_box"],
             "null_overlap_or_conf": st["null_overlap_or_conf"],
-            # pid: these tracks were not sent; tid: they were sent (track_id only, no person_id yet)
+            # pid: these tracks were not sent; tid: they were sent (track_id only); both: sent with person_id null
             "tracked_without_person_id": st["tracked_without_person_id"],
             f"distinct_{ID_KEY[args.id_type]}s": sorted(persons[c]),
         }
+        if args.id_type == "both":
+            summary["cameras"][c]["distinct_person_ids"] = sorted(person_ids[c])
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     print(f"[record] wrote {writer.batches} batches to {out_path}")
