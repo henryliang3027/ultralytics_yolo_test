@@ -4,3 +4,5 @@ results/*
 *.onnx
 .venv/
 cut/output/*
+datasets/*
+yolo26[mlx].pt

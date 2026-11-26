@@ -23,6 +23,7 @@ class PersonTracker:
         args = YAML.load(check_yaml("tracktrack.yaml"))  # library defaults for every knob not in our config
         args.update(asdict(cfg))
         self._tracker = TRACKTRACK(SimpleNamespace(**args))
+        self.last_tracks = np.zeros((0, 8), np.float32)  # raw TRACKTRACK output of the last update(), for drawing
 
     def update(self, dets: Detections, image: np.ndarray) -> np.ndarray:
         """Advance one frame. Returns (N,) track id per detection row, -1 if that detection is not tracked."""
@@ -32,6 +33,7 @@ class PersonTracker:
         xywh[:, 2:] = xyxy[:, 2:] - xyxy[:, :2]
 
         out = self._tracker.update(SimpleNamespace(xywh=xywh, conf=dets.conf, cls=dets.cls), img=image)
+        self.last_tracks = out.reshape(-1, 8)
 
         ids = np.full(len(dets), -1, dtype=int)
         for row in out:
