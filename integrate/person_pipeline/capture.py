@@ -88,9 +88,14 @@ class OpenCVSource(FrameSource):
     """
 
     def _open(self) -> cv2.VideoCapture:
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-            f"rtsp_transport;{self.cfg.transport}|fflags;nobuffer|flags;low_delay"
-        )
+        if os.path.isfile(self.cfg.url):
+            # Local files must not use nobuffer: it drops the packets read while probing the stream, which include
+            # the first keyframe, so decoding starts on a P-frame ("first frame is no keyframe") and shows gray blocks.
+            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+        else:
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                f"rtsp_transport;{self.cfg.transport}|fflags;nobuffer|flags;low_delay"
+            )
         cap = cv2.VideoCapture(self.cfg.url, cv2.CAP_FFMPEG)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # ignored by some FFmpeg builds; the drop-old-frames design covers it
         self.fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
